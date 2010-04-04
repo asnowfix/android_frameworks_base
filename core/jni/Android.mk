@@ -125,8 +125,13 @@ LOCAL_SRC_FILES:= \
 	android_backup_BackupDataInput.cpp \
 	android_backup_BackupDataOutput.cpp \
 	android_backup_FileBackupHelperBase.cpp \
-	android_backup_BackupHelperDispatcher.cpp \
-	android_hardware_fm.cpp
+	android_backup_BackupHelperDispatcher.cpp
+
+ifeq ($(strip $(BOARD_HAVE_FM_RECEIVER)),true)
+	LOCAL_CFLAGS += -DHAVE_FM_RECEIVER
+	LOCAL_SRC_FILES += \
+		android_hardware_fm.cpp
+endif
 
 LOCAL_C_INCLUDES += \
 	$(JNI_H_INCLUDE) \
