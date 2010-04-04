@@ -127,8 +127,8 @@ public:
     /**
      * Only used if overlays are used for camera preview.
      */
-    virtual bool         useOverlay() = 0;
-    virtual status_t     setOverlay(const sp<Overlay> &overlay) = 0;
+    virtual bool         useOverlay() { return false; };
+    virtual status_t     setOverlay(const sp<Overlay> &overlay) { return NO_ERROR; }
 
     /**
      * Stop a previously started preview.
