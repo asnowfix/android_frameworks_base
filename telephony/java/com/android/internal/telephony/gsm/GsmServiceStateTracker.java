@@ -820,6 +820,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 newCellLoc.setStateInvalid();
                 setSignalStrengthDefaultValues();
                 mGotCountryCode = false;
+                Log.d(LOG_TAG, "Radio unavailable");
                 pollStateDone();
             break;
 
@@ -828,6 +829,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 newCellLoc.setStateInvalid();
                 setSignalStrengthDefaultValues();
                 mGotCountryCode = false;
+                Log.d(LOG_TAG, "Radio off");
                 pollStateDone();
             break;
 
