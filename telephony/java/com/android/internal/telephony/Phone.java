@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
+ * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,6 +164,7 @@ public interface Phone {
     static final String REASON_PS_RESTRICT_ENABLED = "psRestrictEnabled";
     static final String REASON_PS_RESTRICT_DISABLED = "psRestrictDisabled";
     static final String REASON_SIM_LOADED = "simLoaded";
+    static final String REASON_RADIO_TECHNOLOGY_CHANGED = "radioTechnologyChanged";
 
     // Used for band mode selection methods
     static final int BM_UNSPECIFIED = 0; // selected by baseband automatically
@@ -1170,6 +1172,23 @@ public interface Phone {
     void invokeOemRilRequestRaw(byte[] data, Message response);
 
     /**
+     * Invokes invokeOemRilRequestRaw with data encoded for ICC
+     * De-Personalization.
+     *
+     * @param pin Pin for De-Personalization..
+     * @param type The De-Personalization type.
+     * @param response <strong>On success</strong>,
+     * (byte[])(((AsyncResult)response.obj).result)
+     * <strong>On failure</strong>,
+     * (((AsyncResult)response.obj).result) == null and
+     * (((AsyncResult)response.obj).exception) being an instance of
+     * com.android.internal.telephony.gsm.CommandException
+     *
+     * @see #invokeDepersonalization(String, int, android.os.Message)
+     */
+    void invokeDepersonalization(String pin, int type, Message response);
+
+    /**
      * Invokes RIL_REQUEST_OEM_HOOK_Strings on RIL implementation.
      *
      * @param strings The strings to make available as the request data.
@@ -1184,6 +1203,68 @@ public interface Phone {
      * @see #invokeOemRilRequestStrings(java.lang.String[], android.os.Message)
      */
     void invokeOemRilRequestStrings(String[] strings, Message response);
+
+    /**
+     * Register for RIL_UNSOL_OEM_HOOK_EXT_APP responses from RIL
+     *
+     * @param h Handler that receives the notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void setOnUnsolOemHookExtApp(Handler h, int what, Object obj);
+
+    /**
+     * Unregister a RIL_UNSOL_OEM_HOOK_EXT_APP response handler
+     *
+     * @param h Handler to be removed from the registrant list.
+     */
+    void unSetOnUnsolOemHookExtApp(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Burst DTMF.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdBurstDtmf(Handler h, int what, Object obj);
+
+    void unregisterForCdmaFwdBurstDtmf(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Continuous DTMF
+     * Start.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdContDtmfStart(Handler h, int what, Object obj);
+
+    void unregisterForCdmaFwdContDtmfStart(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Continuous DTMF
+     * Stop.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdContDtmfStop(Handler h, int what, Object obj);
+
+    void unregisterForCdmaFwdContDtmfStop(Handler h);
+
+    /**
+     * Handlers for call re-establishment indications.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCallReestablishInd(Handler h, int what, Object obj);
+
+    void unregisterForCallReestablishInd(Handler h);
 
     /**
      * Get the current active PDP context list
@@ -1722,5 +1803,17 @@ public interface Phone {
      */
     void unsetOnEcbModeExitResponse(Handler h);
 
+    /**
+     * Checks whether the modem is in power save mode
+     * @return true if modem is in power save mode
+     */
+    boolean isModemPowerSave();
+
+    /**
+     * Get the status of "Restriction of menu options for manual PLMN selection"
+     * bit from EF_CSP data. This belongs to "Value Added Services Group".
+     * @return 1 if this bit is set, 0 if it is not set
+     */
+    int getCspPlmnStatus();
 
 }

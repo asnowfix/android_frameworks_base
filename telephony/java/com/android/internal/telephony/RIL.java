@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2006 The Android Open Source Project
+ * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +40,7 @@ import android.os.Message;
 import android.os.Parcel;
 import android.os.PowerManager;
 import android.os.SystemProperties;
+import android.os.RegistrantList;
 import android.os.PowerManager.WakeLock;
 import android.telephony.NeighboringCellInfo;
 import android.telephony.PhoneNumberUtils;
@@ -65,6 +67,8 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 
@@ -1938,26 +1942,30 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         sendScreenState(true);
    }
 
-    private void setRadioStateFromRILInt(int state) {
-        RadioState newState;
+    private RadioState getRadioStateFromInt(int stateInt) {
+        RadioState state;
 
         /* RIL_RadioState ril.h */
-        switch(state) {
-            case 0: newState = RadioState.RADIO_OFF; break;
-            case 1: newState = RadioState.RADIO_UNAVAILABLE; break;
-            case 2: newState = RadioState.SIM_NOT_READY; break;
-            case 3: newState = RadioState.SIM_LOCKED_OR_ABSENT; break;
-            case 4: newState = RadioState.SIM_READY; break;
-            case 5: newState = RadioState.RUIM_NOT_READY; break;
-            case 6: newState = RadioState.RUIM_READY; break;
-            case 7: newState = RadioState.RUIM_LOCKED_OR_ABSENT; break;
-            case 8: newState = RadioState.NV_NOT_READY; break;
-            case 9: newState = RadioState.NV_READY; break;
+        switch(stateInt) {
+            case 0: state = RadioState.RADIO_OFF; break;
+            case 1: state = RadioState.RADIO_UNAVAILABLE; break;
+            case 2: state = RadioState.SIM_NOT_READY; break;
+            case 3: state = RadioState.SIM_LOCKED_OR_ABSENT; break;
+            case 4: state = RadioState.SIM_READY; break;
+            case 5: state = RadioState.RUIM_NOT_READY; break;
+            case 6: state = RadioState.RUIM_READY; break;
+            case 7: state = RadioState.RUIM_LOCKED_OR_ABSENT; break;
+            case 8: state = RadioState.NV_NOT_READY; break;
+            case 9: state = RadioState.NV_READY; break;
 
             default:
                 throw new RuntimeException(
-                            "Unrecognized RIL_RadioState: " +state);
+                            "Unrecognized RIL_RadioState: " + stateInt);
         }
+        return state;
+    }
+
+    private void switchToRadioState(RadioState newState) {
 
         if (mInitialRadioStateChange) {
             if (newState.isOn()) {
@@ -2183,6 +2191,7 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_SET_SMSC_ADDRESS: ret = responseVoid(p); break;
             case RIL_REQUEST_EXIT_EMERGENCY_CALLBACK_MODE: ret = responseVoid(p); break;
             case RIL_REQUEST_REPORT_SMS_MEMORY_STATUS: ret = responseVoid(p); break;
+            case RIL_REQUEST_REPORT_STK_SERVICE_IS_RUNNING: ret = responseVoid(p); break;
             default:
                 throw new RuntimeException("Unrecognized solicited response: " + rr.mRequest);
             //break;
@@ -2337,9 +2346,10 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         switch(response) {
             case RIL_UNSOL_RESPONSE_RADIO_STATE_CHANGED:
                 /* has bonus radio state int */
-                setRadioStateFromRILInt(p.readInt());
+                RadioState newState = getRadioStateFromInt(p.readInt());
+                if (RILJ_LOGD) unsljLogMore(response, newState.toString());
 
-                if (RILJ_LOGD) unsljLogMore(response, mState.toString());
+                switchToRadioState(newState);
             break;
             case RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED:
                 if (RILJ_LOGD) unsljLog(response);
@@ -2604,7 +2614,14 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
             case RIL_UNSOL_OEM_HOOK_RAW:
                 if (RILJ_LOGD) unsljLogvRet(response, IccUtils.bytesToHexString((byte[])ret));
-                if (mUnsolOemHookRawRegistrant != null) {
+                ByteBuffer oemHookResponse = ByteBuffer.wrap((byte[])ret);
+                oemHookResponse.order(ByteOrder.nativeOrder());
+
+                if (isQcUnsolOemHookResp(oemHookResponse)) {
+                    Log.d(LOG_TAG, "OEM ID check Passed");
+                    processUnsolOemhookResponse(oemHookResponse);
+                } else if (mUnsolOemHookRawRegistrant != null) {
+                    Log.d(LOG_TAG, "External OEM message, to be notified");
                     mUnsolOemHookRawRegistrant.notifyRegistrant(new AsyncResult(null, ret, null));
                 }
                 break;
@@ -2626,6 +2643,111 @@ public final class RIL extends BaseCommands implements CommandsInterface {
                                         new AsyncResult (null, ret, null));
                 }
         }
+    }
+
+    private boolean isQcUnsolOemHookResp(ByteBuffer oemHookResponse) {
+        String mOemIdentifier = "QUALCOMM";
+        int INT_SIZE = 4;
+        int mHeaderSize = mOemIdentifier.length() + 2 * INT_SIZE;
+
+        /* Check OEM ID in UnsolOemHook response */
+        if (oemHookResponse.capacity() < mHeaderSize) {
+            /*
+             * size of UnsolOemHook message is less than expected, considered as
+             * External OEM's message
+             */
+            Log.d(LOG_TAG, "RIL_UNSOL_OEM_HOOK_RAW data size is " + oemHookResponse.capacity());
+            return false;
+        } else {
+            byte[] oem_id_bytes = new byte[mOemIdentifier.length()];
+            oemHookResponse.get(oem_id_bytes);
+            String oem_id_str = new String(oem_id_bytes);
+            Log.d(LOG_TAG, "Oem ID in RIL_UNSOL_OEM_HOOK_RAW is " + oem_id_str);
+            if (!oem_id_str.equals(mOemIdentifier)) {
+                /* OEM ID not matched, considered as External OEM's message */
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void processUnsolOemhookResponse(ByteBuffer oemHookResponse) {
+        /** Starting number for QCRILHOOK request and response IDs */
+        final int QCRILHOOK_BASE = 0x80000;
+
+        /** qcrilhook unsolicited response IDs */
+        final int QCRILHOOK_UNSOL_EXTENDED_DBM_INTL = QCRILHOOK_BASE + 1000;
+        final int QCRILHOOK_UNSOL_CDMA_BURST_DTMF = QCRILHOOK_BASE + 1001;
+        final int QCRILHOOK_UNSOL_CDMA_CONT_DTMF_START = QCRILHOOK_BASE + 1002;
+        final int QCRILHOOK_UNSOL_CDMA_CONT_DTMF_STOP = QCRILHOOK_BASE + 1003;
+        final int QCRILHOOK_UNSOL_CALL_REESTABLISH_IND = QCRILHOOK_BASE + 1004;
+
+        int response_id = 0, response_size = 0;
+
+        response_id = oemHookResponse.getInt();
+        Log.d(LOG_TAG, "Response ID in RIL_UNSOL_OEM_HOOK_RAW is " + response_id);
+
+        response_size = oemHookResponse.getInt();
+        if (response_size < 0) {
+            Log.e(LOG_TAG, "Response Size is Invalid " + response_size);
+            return;
+        }
+        byte[] response_data = new byte[response_size];
+        oemHookResponse.get(response_data, 0, response_size);
+
+        switch (response_id) {
+            case QCRILHOOK_UNSOL_CDMA_BURST_DTMF:
+                notifyCdmaFwdBurstDtmf(response_data);
+                break;
+
+            case QCRILHOOK_UNSOL_CDMA_CONT_DTMF_START:
+                notifyCdmaFwdContDtmfStart(response_data);
+                break;
+
+            case QCRILHOOK_UNSOL_CDMA_CONT_DTMF_STOP:
+                notifyCdmaFwdContDtmfStop();
+                break;
+
+            case QCRILHOOK_UNSOL_CALL_REESTABLISH_IND:
+                notifyCallReestablish();
+                break;
+
+            default:
+                Log.d(LOG_TAG, "Response ID " + response_id + "is not served in this process.");
+                Log.d(LOG_TAG, "To broadcast an Intent via the notifier to external apps");
+                if (mUnsolOemHookExtAppRegistrant != null) {
+                    oemHookResponse.rewind();
+                    byte[] origData = oemHookResponse.array();
+                    mUnsolOemHookExtAppRegistrant.notifyRegistrant(new AsyncResult(null, origData,
+                            null));
+                }
+                break;
+        }
+
+    }
+
+    /** Notify registrants of FWD Burst DTMF Tone. */
+    protected void notifyCdmaFwdBurstDtmf(byte[] data) {
+        AsyncResult ar = new AsyncResult(null, data, null);
+        mCdmaFwdBurstDtmfRegistrants.notifyRegistrants(ar);
+    }
+
+    /** Notify registrants of FWD Continuous DTMF Tone Start. */
+    protected void notifyCdmaFwdContDtmfStart(byte[] data) {
+        AsyncResult ar = new AsyncResult(null, data, null);
+        mCdmaFwdContDtmfStartRegistrants.notifyRegistrants(ar);
+    }
+
+    /** Notify registrants of FWD Continuous DTMF Tone Stop. */
+    protected void notifyCdmaFwdContDtmfStop() {
+        AsyncResult ar = new AsyncResult(null, null, null);
+        mCdmaFwdContDtmfStopRegistrants.notifyRegistrants(ar);
+    }
+
+    /** Notify registrants of call progress info indications */
+    protected void notifyCallReestablish() {
+        AsyncResult ar = new AsyncResult(null, null, null);
+        mCallReestablishIndRegistrants.notifyRegistrants(ar);
     }
 
     private Object
@@ -2791,8 +2913,8 @@ public final class RIL extends BaseCommands implements CommandsInterface {
             ca.aid            = p.readString();
             ca.app_label      = p.readString();
             ca.pin1_replaced  = p.readInt();
-            ca.pin1           = p.readInt();
-            ca.pin2           = p.readInt();
+            ca.pin1           = ca.PinStateFromRILInt(p.readInt());
+            ca.pin2           = ca.PinStateFromRILInt(p.readInt());
             status.addApplication(ca);
         }
         return status;
@@ -3365,6 +3487,8 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         RILRequest rr = RILRequest.obtain(
                 RILConstants.RIL_REQUEST_QUERY_TTY_MODE, response);
 
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
         send(rr);
     }
 
@@ -3377,6 +3501,9 @@ public final class RIL extends BaseCommands implements CommandsInterface {
 
         rr.mp.writeInt(1);
         rr.mp.writeInt(ttyMode);
+
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest)
+                + " : " + ttyMode);
 
         send(rr);
     }
@@ -3435,5 +3562,39 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
 
         send(rr);
+    }
+
+    /**
+     * Encodes data for ME Depersonalization and invokes
+     * invokeOemRilRequestRaw.
+     */
+    public void invokeDepersonalization(String pin, int type, Message response) {
+        int INT_SIZE = 4;
+        String mOemIdentifier = "QUALCOMM";
+        int mHeaderSize = mOemIdentifier.length() + 2 * INT_SIZE;
+        // Starting number for OEMHOOK request and response IDs
+        int OEMHOOK_BASE = 0x80000;
+        // De-activate ICC Personalization
+        int OEMHOOK_ME_DEPERSONALIZATION = OEMHOOK_BASE + 4;
+        int requestSize = INT_SIZE + pin.length();
+        byte[] request = new byte[mHeaderSize + requestSize + 1];
+        byte termChar = '\0';
+        ByteBuffer reqBuffer = ByteBuffer.wrap(request);
+        reqBuffer.order(ByteOrder.nativeOrder());
+
+        // Add OEM identifier String
+        reqBuffer.put(mOemIdentifier.getBytes());
+
+        // Add Request ID
+        reqBuffer.putInt(OEMHOOK_ME_DEPERSONALIZATION);
+
+        // Add Request payload length
+        reqBuffer.putInt(requestSize);
+
+        reqBuffer.putInt(type); // De-Personalization Subtype
+        reqBuffer.put(pin.getBytes()); // De-Personalization PIN
+        reqBuffer.put(termChar); // Null character indicating end of string
+
+        invokeOemRilRequestRaw(request, response);
     }
 }

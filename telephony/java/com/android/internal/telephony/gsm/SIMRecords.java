@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2006 The Android Open Source Project
+ * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +25,13 @@ import android.os.AsyncResult;
 import android.os.Message;
 import android.os.SystemProperties;
 import android.util.Log;
+import android.telephony.gsm.GsmCellLocation;
 
 import com.android.internal.telephony.AdnRecord;
 import com.android.internal.telephony.AdnRecordCache;
 import com.android.internal.telephony.AdnRecordLoader;
 import com.android.internal.telephony.CommandsInterface;
+import com.android.internal.telephony.IccCardApplication;
 import com.android.internal.telephony.IccFileHandler;
 import com.android.internal.telephony.IccRecords;
 import com.android.internal.telephony.IccUtils;
@@ -59,6 +62,13 @@ public final class SIMRecords extends IccRecords {
     // ***** Cached SIM State; cleared on channel close
 
     String imsi;
+    boolean oplDataPresent;
+    boolean pnnDataPresent;
+    String  pnnDataLongName;
+    String  pnnDataShortName;
+    int     sstPlmnOplValue;
+    ArrayList oplCache;
+    ArrayList pnnCache;
     boolean callForwardingEnabled;
 
 
@@ -73,6 +83,7 @@ public final class SIMRecords extends IccRecords {
      *  mCphsInfo[1] and mCphsInfo[2] is CPHS Service Table
      */
     private byte[] mCphsInfo = null;
+    int cspPlmn = 1;
 
     byte[] efMWIS = null;
     byte[] efCPHS_MWI =null;
@@ -140,7 +151,16 @@ public final class SIMRecords extends IccRecords {
     private static final int EVENT_SET_MSISDN_DONE = 30;
     private static final int EVENT_SIM_REFRESH = 31;
     private static final int EVENT_GET_CFIS_DONE = 32;
+    private static final int EVENT_GET_ALL_OPL_RECORDS_DONE = 33;
+    private static final int EVENT_GET_ALL_PNN_RECORDS_DONE = 34;
+    private static final int EVENT_GET_CSP_CPHS_DONE = 35;
+    private static final int EVENT_AUTO_SELECT_DONE = 300;
 
+    //EONS constants
+    private static int EONS_NOT_INITIALIZED  = -1;
+    private static int EONS_DISABLED    = 0;
+    private static int PNN_OPL_ENABLED  = 1;
+    private static int ONLY_PNN_ENABLED = 2;
     // ***** Constructor
 
     SIMRecords(GSMPhone p) {
@@ -194,12 +214,20 @@ public final class SIMRecords extends IccRecords {
         efCPHS_MWI = null;
         spdiNetworks = null;
         pnnHomeName = null;
+        oplDataPresent = false;
+        pnnDataPresent = false;
+        pnnDataLongName = null;
+        pnnDataShortName = null;
+        sstPlmnOplValue = EONS_NOT_INITIALIZED;
+        oplCache = null;
+        pnnCache = null;
 
         adnCache.reset();
 
         phone.setSystemProperty(PROPERTY_ICC_OPERATOR_NUMERIC, null);
         phone.setSystemProperty(PROPERTY_ICC_OPERATOR_ALPHA, null);
         phone.setSystemProperty(PROPERTY_ICC_OPERATOR_ISO_COUNTRY, null);
+        SystemProperties.set("gsm.eons.name", null);
 
         // recordsRequested is set to false indicating that the SIM
         // read requests made so far are not valid. This is set to
@@ -469,6 +497,11 @@ public final class SIMRecords extends IccRecords {
 
         boolean isRecordLoadResponse = false;
 
+        if (!phone.mIsTheCurrentActivePhone) {
+            Log.e(LOG_TAG, "Received message " + msg +
+                    "[" + msg.what + "] while being destroyed. Ignoring.");
+            return;
+        }
         try { switch (msg.what) {
             case EVENT_SIM_READY:
                 onSimReady();
@@ -561,6 +594,13 @@ public final class SIMRecords extends IccRecords {
                 break;
             case EVENT_GET_CPHS_MAILBOX_DONE:
             case EVENT_GET_MBDN_DONE:
+                //Resetting the voice mail number and voice mail tag to null
+                //as these should be updated from the data read from EF_MBDN.
+                //If they are not reset, incase of invalid data/exception these
+                //variables are retaining their previous values and are
+                //causing invalid voice mailbox info display to user.
+                voiceMailNum = null;
+                voiceMailTag = null;
                 isRecordLoadResponse = true;
 
                 ar = (AsyncResult)msg.obj;
@@ -807,6 +847,7 @@ public final class SIMRecords extends IccRecords {
                     break;
                 }
 
+                Log.i(LOG_TAG, "SPDI: " + IccUtils.bytesToHexString(data));
                 parseEfSpdi(data);
             break;
 
@@ -882,6 +923,7 @@ public final class SIMRecords extends IccRecords {
                 }
                 break;
             case EVENT_GET_SST_DONE:
+                sstPlmnOplValue = EONS_DISABLED;
                 isRecordLoadResponse = true;
 
                 ar = (AsyncResult)msg.obj;
@@ -891,7 +933,8 @@ public final class SIMRecords extends IccRecords {
                     break;
                 }
 
-                //Log.d(LOG_TAG, "SST: " + IccUtils.bytesToHexString(data));
+                Log.i(LOG_TAG, "SST: " + IccUtils.bytesToHexString(data));
+                handleSstData(data);
             break;
 
             case EVENT_GET_INFO_CPHS_DONE:
@@ -906,6 +949,34 @@ public final class SIMRecords extends IccRecords {
                 mCphsInfo = (byte[])ar.result;
 
                 if (DBG) log("iCPHS: " + IccUtils.bytesToHexString(mCphsInfo));
+            break;
+
+            case EVENT_GET_CSP_CPHS_DONE:
+                isRecordLoadResponse = true;
+
+                ar = (AsyncResult)msg.obj;
+
+                if (ar.exception != null) {
+                    Log.e(LOG_TAG,"Exception in fetching EF CSP data " + ar.exception);
+                    break;
+                }
+
+                data = (byte[])ar.result;
+
+                Log.i(LOG_TAG,"CSP Hex Data: " + IccUtils.bytesToHexString(data));
+                handleEfCspData(data);
+            break;
+
+            case EVENT_AUTO_SELECT_DONE:
+                isRecordLoadResponse = false;
+
+                ar = (AsyncResult) msg.obj;
+
+                if (ar.exception != null) {
+                    Log.e(LOG_TAG,"CSP: Automatic network selection: Fail");
+                } else {
+                    Log.i(LOG_TAG,"CSP: Automatic network selection: Success");
+                }
             break;
 
             case EVENT_SET_MBDN_DONE:
@@ -996,6 +1067,33 @@ public final class SIMRecords extends IccRecords {
                 ((GSMPhone) phone).notifyCallForwardingIndicator();
                 break;
 
+            case EVENT_GET_ALL_OPL_RECORDS_DONE:
+                isRecordLoadResponse = true;
+                ar = (AsyncResult)msg.obj;
+                if (ar.exception != null) {
+                    Log.e(LOG_TAG, "EONS: Exception in fetching OPL Records " + ar.exception);
+                    oplCache = null;
+                    break;
+                }
+                oplCache = (ArrayList)ar.result;
+                if (isEonsEnabled()) {
+                    displayEonsName();
+                }
+                break;
+
+            case EVENT_GET_ALL_PNN_RECORDS_DONE:
+                isRecordLoadResponse = true;
+                ar = (AsyncResult)msg.obj;
+                if (ar.exception != null) {
+                    Log.e(LOG_TAG, "EONS: Exception in fetching PNN Records "+ar.exception);
+                    pnnCache = null;
+                    break;
+                }
+                pnnCache = (ArrayList)ar.result;
+                if (isEonsEnabled()) {
+                    displayEonsName();
+                }
+                break;
         }}catch (RuntimeException exc) {
             // I don't want these exceptions to be fatal
             Log.w(LOG_TAG, "Exception parsing SIM record", exc);
@@ -1019,9 +1117,51 @@ public final class SIMRecords extends IccRecords {
                 new AdnRecordLoader(phone).loadFromEF(EF_MAILBOX_CPHS, EF_EXT1,
                         1, obtainMessage(EVENT_GET_CPHS_MAILBOX_DONE));
                 break;
+            case EF_OPL:
+                Log.i(LOG_TAG,"EONS: SIM Refresh called for EF_OPL");
+                updateOplCache();
+                break;
+            case EF_PNN:
+                Log.i(LOG_TAG,"EONS: SIM Refresh called for EF_PNN");
+                updatePnnCache();
+                break;
+            case EF_SST:
+                recordsToLoad++;
+                Log.i(LOG_TAG,"EONS: SIM Refresh called for EF_SST");
+                phone.getIccFileHandler().loadEFTransparent(EF_SST,
+                      obtainMessage(EVENT_GET_SST_DONE));
+                break;
+            case EF_CSP_CPHS:
+                recordsToLoad++;
+                Log.i(LOG_TAG,"CSP: SIM Refresh called for EF_CSP_CPHS");
+                phone.getIccFileHandler().loadEFTransparent(EF_CSP_CPHS,
+                      obtainMessage(EVENT_GET_CSP_CPHS_DONE));
+                break;
+            case EF_MSISDN:
+                recordsToLoad++;
+                Log.i(LOG_TAG,"SIM Refresh called for EF_MSISDN");
+                new AdnRecordLoader(phone).loadFromEF(EF_MSISDN, EF_EXT1, 1,
+                      obtainMessage(EVENT_GET_MSISDN_DONE));
+                break;
+            case EF_SPN:
+                Log.i(LOG_TAG,"SIM Refresh called for EF_SPN");
+                getSpnFsm(true, null);
+                break;
+            case EF_CFIS:
+                recordsToLoad++;
+                Log.i(LOG_TAG,"SIM Refresh called for EF_CFIS");
+                phone.getIccFileHandler().loadEFLinearFixed(EF_CFIS,
+                      1, obtainMessage(EVENT_GET_CFIS_DONE));
+                break;
+            case EF_CFF_CPHS:
+                recordsToLoad++;
+                Log.i(LOG_TAG,"SIM Refresh called for EF_CFF_CPHS");
+                phone.getIccFileHandler().loadEFTransparent(EF_CFF_CPHS,
+                      obtainMessage(EVENT_GET_CFF_DONE));
+                break;
             default:
-                // For now, fetch all records if this is not a
-                // voicemail number.
+                // For now, fetch all records if this is not
+                // one of the handled files.
                 // TODO: Handle other cases, instead of fetching all.
                 adnCache.reset();
                 fetchSimRecords();
@@ -1243,11 +1383,31 @@ public final class SIMRecords extends IccRecords {
         iccFh.loadEFLinearFixed(EF_PNN, 1, obtainMessage(EVENT_GET_PNN_DONE));
         recordsToLoad++;
 
+        Log.i(LOG_TAG,"EONS: Properties persist.cust.tel.adapt is " +
+                       SystemProperties.getBoolean("persist.cust.tel.adapt",false) +
+                       ", persist.cust.tel.eons is " +
+                       SystemProperties.getBoolean("persist.cust.tel.eons",false) +
+                       ", persist.cust.tel.efcsp.plmn is " +
+                       SystemProperties.getBoolean("persist.cust.tel.efcsp.plmn",false));
+
+        //Fetch OPL records and cache them
+        updateOplCache();
+
+        //Fetch PNN records and cache them
+        updatePnnCache();
+
         iccFh.loadEFTransparent(EF_SST, obtainMessage(EVENT_GET_SST_DONE));
         recordsToLoad++;
 
         iccFh.loadEFTransparent(EF_INFO_CPHS, obtainMessage(EVENT_GET_INFO_CPHS_DONE));
         recordsToLoad++;
+
+        //Fetch CSP data if ADAPT/EFCSP system property is set.
+        if (SystemProperties.getBoolean("persist.cust.tel.adapt",false) ||
+            SystemProperties.getBoolean("persist.cust.tel.efcsp.plmn",false)) {
+            iccFh.loadEFTransparent(EF_CSP_CPHS,obtainMessage(EVENT_GET_CSP_CPHS_DONE));
+            recordsToLoad++;
+        }
 
         // XXX should seek instead of examining them all
         if (false) { // XXX
@@ -1368,6 +1528,7 @@ public final class SIMRecords extends IccRecords {
                     phone.setSystemProperty(PROPERTY_ICC_OPERATOR_ALPHA, spn);
 
                     spnState = Get_Spn_Fsm_State.IDLE;
+                    ((GSMPhone) phone).mSST.updateSpnDisplay();
                 } else {
                     phone.getIccFileHandler().loadEFTransparent( EF_SPN_CPHS,
                             obtainMessage(EVENT_GET_SPN_DONE));
@@ -1390,6 +1551,7 @@ public final class SIMRecords extends IccRecords {
                     phone.setSystemProperty(PROPERTY_ICC_OPERATOR_ALPHA, spn);
 
                     spnState = Get_Spn_Fsm_State.IDLE;
+                    ((GSMPhone) phone).mSST.updateSpnDisplay();
                 } else {
                     phone.getIccFileHandler().loadEFTransparent(
                             EF_SPN_SHORT_CPHS, obtainMessage(EVENT_GET_SPN_DONE));
@@ -1406,6 +1568,7 @@ public final class SIMRecords extends IccRecords {
 
                     if (DBG) log("Load EF_SPN_SHORT_CPHS: " + spn);
                     phone.setSystemProperty(PROPERTY_ICC_OPERATOR_ALPHA, spn);
+                    ((GSMPhone) phone).mSST.updateSpnDisplay();
                 }else {
                     if (DBG) log("No SPN loaded in either CHPS or 3GPP");
                 }
@@ -1427,6 +1590,18 @@ public final class SIMRecords extends IccRecords {
         SimTlv tlv = new SimTlv(data, 0, data.length);
 
         byte[] plmnEntries = null;
+        byte tagSpdiPlmnListOffset = 2;
+
+        //As per spec 3GPP TS 31.102/51.011, EF_SPDI contains
+        //SERVICE_PROVIDER_DISPLAY_INFO_TAG byte and its associated Length
+        //byte followed by TAG_SPDI_PLMN_LIST and its corresponding data.
+        //To process service provider PLMN list,we need to start from
+        //TAG_SPDI_PLMN_LIST. So incrementing the current offset which
+        //is now at SERVICE_PROVIDER_DISPLAY_INFO_TAG.
+        if (!tlv.incrementCurOffset(tagSpdiPlmnListOffset)) {
+            Log.w(LOG_TAG, "SPDI: invalid call to incrementCurOffset.");
+            return;
+        }
 
         // There should only be one TAG_SPDI_PLMN_LIST
         for ( ; tlv.isValidObject() ; tlv.nextObject()) {
@@ -1437,14 +1612,31 @@ public final class SIMRecords extends IccRecords {
         }
 
         if (plmnEntries == null) {
+            Log.w(LOG_TAG, "SPDI: plmnEntries is null");
             return;
         }
 
         spdiNetworks = new ArrayList<String>(plmnEntries.length / 3);
 
+        byte[] plmnData = new byte[3];
+        int indMnc3;
         for (int i = 0 ; i + 2 < plmnEntries.length ; i += 3) {
             String plmnCode;
-            plmnCode = IccUtils.bcdToString(plmnEntries, i, 3);
+
+            //Convert PLMN hex data to string.
+            plmnData[0] = (byte)(((plmnEntries[i] << 4) & 0xf0) | ((plmnEntries[i] >> 4) & 0x0f));/*mcc1mcc2*/
+            plmnData[1] = (byte)(((plmnEntries[i + 1] << 4) & 0xf0) | (plmnEntries[i + 2] & 0x0f));/*mcc3mnc1*/
+            plmnData[2] = (byte)(plmnEntries[i + 2] & 0xf0 | ((plmnEntries[i + 1] >> 4) & 0x0f));/*mnc2mnc3*/
+            plmnCode = IccUtils.bytesToHexString(plmnData);
+
+            //MNC3 can be 'f', in that case we should not consider it and
+            //treat this as 2 digit MNC.
+            indMnc3 = plmnCode.length() - 1;
+            if (plmnCode.charAt(indMnc3) == 'f') {
+                Log.w(LOG_TAG,"SPDI: Strip MNC3");
+                plmnCode = plmnCode.substring(0, indMnc3);
+            }
+            log("SPDI: plmnCode " + plmnCode);
 
             // Valid operator codes are 5 or 6 digits
             if (plmnCode.length() >= 5) {
@@ -1462,8 +1654,522 @@ public final class SIMRecords extends IccRecords {
         return ((mCphsInfo[1] & CPHS_SST_MBN_MASK) == CPHS_SST_MBN_ENABLED );
     }
 
+    /**
+     * Return the EONS Name from EF_PNN
+     * @return null if SIM/USIM is not ready or pnn/opl data is invalid.
+     */
+    String getPnnLongName() {
+        if (pnnDataPresent) {
+            //Update EONS name in system property so that it can
+            //be used in phone status display page.
+            SystemProperties.set("gsm.eons.name", pnnDataLongName);
+            Log.i(LOG_TAG,"EONS: Property gsm.eons.name set to " +
+                  SystemProperties.get("gsm.eons.name"));
+            return pnnDataLongName;
+        } else {
+            SystemProperties.set("gsm.eons.name", null);
+            return null;
+        }
+    }
+
+    /**
+     * Checks whether EONS is enabled.
+     * @return true if EONS is enabled, otherwise return false.
+     */
+    boolean isEonsEnabled() {
+        String eonsProp  = "persist.cust.tel.eons";
+        String adaptProp = "persist.cust.tel.adapt";
+
+        if (sstPlmnOplValue == EONS_DISABLED ||
+            sstPlmnOplValue == EONS_NOT_INITIALIZED) {
+            return false;
+        } else if (SystemProperties.getBoolean(adaptProp,false) ||
+            SystemProperties.getBoolean(eonsProp,false)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Fetch EONS name from EF_OPL/EF_PNN files when LAC/Service State
+     * changes. Display this name.
+     */
+    void fetchAndDisplayEonsName() {
+        if (sstPlmnOplValue == PNN_OPL_ENABLED) {
+            //If both PNN and OPL services are enabled, a match should
+            //be found in OPL file and corresponding record in the PNN
+            //file should be used for fetching EONS name.
+            displayEonsName();
+        } else if (sstPlmnOplValue == ONLY_PNN_ENABLED) {
+            //If PNN service is enabled and OPL service is disabled,fetch EONS
+            //name from first record of PNN file if registered PLMN is HPLMN.
+            fetchPnnFirstRecord();
+        } else {
+            Log.e(LOG_TAG,"EONS: Invalid sstPlmnOplValue " + sstPlmnOplValue);
+        }
+    }
+
+    /**
+     * Function to match plmn from EF_OPL record with the registered plmn.
+     * @param simPlmn, plmn read from EF_OPL record, size atleast 5.
+     * @param bcchPlmn, registered plmn
+     * @param length, length of registered plmn
+     * @return true if plmns match, otherwise false.
+     */
+    boolean matchSimPlmn (int simPlmn[],int bcchPlmn[],int length) {
+        int wildCardDigit = 0x0D;
+        boolean match = false;
+
+        //Apply '0' suffix rule
+        if (simPlmn[5] == 0x0f) {
+            simPlmn[5] = 0;
+        }
+
+        //Check for wildcard digits in simPlmn and overwite them with the
+        //corresponding digits in bcchPlmn.
+        for (int i = 0;i < length;i++) {
+             if (simPlmn[i] == wildCardDigit) {
+                 simPlmn[i] = bcchPlmn[i];
+             }
+        }
+
+        //Match MCC
+        if ((simPlmn[0] == bcchPlmn[0]) &&
+            (simPlmn[1] == bcchPlmn[1]) &&
+            (simPlmn[2] == bcchPlmn[2])) {
+            if (length == 5) {
+                //If the length of registered plmn is 5, then this is
+                //2 digit MNC case. Compare only first two digits of mnc
+                match = ((simPlmn[3] == bcchPlmn[3]) &&
+                        (simPlmn[4] == bcchPlmn[4]));
+            } else {
+               //Otherwise Compare all digits of MNC
+                match = ((simPlmn[3] == bcchPlmn[3]) &&
+                       (simPlmn[4] == bcchPlmn[4]) &&
+                       (simPlmn[5] == bcchPlmn[5]));
+            }
+        }
+        return match;
+    }
+
+    /**
+     * Update OPL cache with EF_OPL records.
+     */
+    void updateOplCache() {
+        Log.i(LOG_TAG,"EONS: Updating OPL Cache");
+        phone.getIccFileHandler().loadEFLinearFixedAll(EF_OPL,
+              obtainMessage(EVENT_GET_ALL_OPL_RECORDS_DONE));
+        recordsToLoad++;
+    }
+
+    /**
+     * Update PNN cache with EF_PNN records.
+     */
+    void updatePnnCache() {
+        Log.i(LOG_TAG,"EONS: Updating PNN Cache");
+        phone.getIccFileHandler().loadEFLinearFixedAll(EF_PNN,
+              obtainMessage(EVENT_GET_ALL_PNN_RECORDS_DONE));
+        recordsToLoad++;
+    }
+
+    /**
+     * Decode MCC and MNC digits from the PLMN data of EF_OPL record.
+     * @param data, EF_OPL record data
+     * @return array containing  MCC and MNC digits
+     */
+    private int[]  getSimPlmnDigits(byte[] data) {
+        int simPlmn[] = {0,0,0,0,0,0};
+
+        //PLMN format as per 3GPP TS 24.008 section 10.5.1.13
+        simPlmn[0] = data[0]&0x0f;     /*mcc1*/
+        simPlmn[1] = (data[0]>>4)&0x0f;/*mcc2*/
+        simPlmn[2] = data[1]&0x0f;     /*mcc3*/
+        simPlmn[3] = data[2]&0x0f;     /*mnc1*/
+        simPlmn[4] = (data[2]>>4)&0x0f;/*mnc2*/
+        simPlmn[5] = (data[1]>>4)&0x0f;/*mnc3*/
+
+        return simPlmn;
+    }
+
+    /**
+     * Decode MCC and MNC digits from the PLMN data of registered operator.
+     * @param regOperator, registered operator plmn string
+     * @return array containing MCC and MNC digits
+     */
+    private int[]  getRegOperatorPlmnDigits(String regOperator) {
+        int bcchPlmn[] = {0,0,0,0,0,0};
+        int bcchPlmnLength = regOperator.length();
+
+        for (int ind = 0;ind < bcchPlmnLength;ind++) {
+             bcchPlmn[ind] = regOperator.charAt(ind) - '0';
+        }
+
+        return bcchPlmn;
+    }
+
+    /**
+     * Fetch EONS name from matching OPL and PNN record.
+     */
+    private void  displayEonsName() {
+        short oplDataPnnNum;
+        int oplDataLac1;
+        int oplDataLac2;
+        int count = 0;
+        int hLac;
+        int ind = 0;
+        int simPlmn[] = {0,0,0,0,0,0};
+        int bcchPlmn[] = {0,0,0,0,0,0};
+        String regOperator;
+
+        if (oplCache == null) {
+            //If the cache is null, there is an exception
+            //in reading records from EF_OPl file.
+            Log.w(LOG_TAG,"EONS: oplCache is null.");
+            return;
+        }
+        count = oplCache.size();
+        regOperator = ((GSMPhone) phone).mSST.ss.getOperatorNumeric();
+        //Registered plmn is required to parse EF_OPL and EF_PNN data.
+        if ((regOperator == null) || (regOperator.trim().length() == 0)) {
+            Log.w(LOG_TAG,"EONS: Registered operator is null or empty.");
+            useMEName();
+            return;
+        }
+
+        Log.i(LOG_TAG,"EONS: Number of OPL records = " + count);
+        oplDataPresent = true;
+        hLac = -1;
+        GsmCellLocation loc = ((GsmCellLocation)phone.getCellLocation());
+        if (loc != null) hLac = loc.getLac();
+        if (hLac == -1) {
+            Log.w(LOG_TAG,"EONS: Registered LAC is -1.");
+            return;
+        }
+
+        try {
+            for (ind = 0; ind < count; ind++) {
+                 byte[] data = (byte[]) oplCache.get(ind);
+
+                 //Split the OPL PLMN data into digits
+                 simPlmn = getSimPlmnDigits(data);
+
+                 //Convert bcch plmn from ASCII to bcd
+                 bcchPlmn = getRegOperatorPlmnDigits(regOperator);
+
+                 oplDataLac1 = ((data[3]&0xff)<<8) | (data[4]&0xff);
+                 oplDataLac2 = ((data[5]&0xff)<<8) | (data[6]&0xff);
+                 oplDataPnnNum  = (short)(data[7]&0xff);
+                 Log.d(LOG_TAG,"EONS: lac1=" + oplDataLac1 + " lac2=" + oplDataLac2 +
+                       " hLac=" + hLac + " pnn rec=" + oplDataPnnNum);
+
+                 //Check if EF_OPL record plmn is same as registered plmn
+                 if (matchSimPlmn(simPlmn,bcchPlmn,regOperator.length())) {
+                     //Check if registered LAC is with in range
+                     if ((oplDataLac1 <= hLac) && (hLac <= oplDataLac2)) {
+                         if ((oplDataPnnNum > 0x00) && (oplDataPnnNum < 0xFF)) {
+                             //We have a valid PNN record number in EF_OPL.
+                             //Read the PNN record from EF_PNN.
+                             Log.i(LOG_TAG,"EONS: lac1=" + oplDataLac1 + " lac2=" + oplDataLac2 +
+                             " hLac=" + hLac + " pnn rec=" + oplDataPnnNum);
+                             getNameFromPnnRecord(oplDataPnnNum);
+                             break;
+                         } else {
+                             oplDataPresent = false;
+                             Log.w(LOG_TAG,
+                             "EONS: PNN record number in EF_OPL is not valid");
+                         }
+                     } else {
+                         oplDataPresent = false;
+                         Log.w(LOG_TAG,
+                          "EONS: Registered LAC is not with in range, ignoring pnn data, " +
+                          "hLac=" + hLac + " lac1=" + oplDataLac1 + " lac2=" + oplDataLac2);
+                     }
+                 } else {
+                     oplDataPresent = false;
+                     Log.w(LOG_TAG,
+                      "EONS: plmn in EF_OPL doesnot match reg plmn,ignoring pnn data sim plmn "+
+                      simPlmn[0]+simPlmn[1]+simPlmn[2]+simPlmn[3]+simPlmn[4]+simPlmn[5]+",bcch plmn "
+                      +bcchPlmn[0]+bcchPlmn[1]+bcchPlmn[2]+bcchPlmn[3]+bcchPlmn[4]+bcchPlmn[5]);
+                 }
+            }
+        } catch (Exception e) {
+            Log.e(LOG_TAG,"EONS: Exception while processing OPL data " + e);
+       }
+
+        if (ind >= count) {
+            //If there is no matching record in the EF_OPL file,
+            //display name from ME database.
+            Log.w(LOG_TAG,"EONS: No matching OPL record found, display name from ME DB");
+            useMEName();
+        }
+    }
+
+    /**
+     * Fetch EONS name from EF_PNN first record if registered PLMN is HPLMN.
+     */
+    void fetchPnnFirstRecord() {
+        String regOperator;
+        regOperator = ((GSMPhone) phone).mSST.ss.getOperatorNumeric();
+        Log.i(LOG_TAG,"EONS: Comparing hplmn " + getSIMOperatorNumeric() +
+                       " with registered plmn " + regOperator);
+        //If the registered PLMN is HPLMN, then fetch
+        //EONS name from first record of EF_PNN
+        oplDataPresent = false;
+        if ((getSIMOperatorNumeric() != null) &&
+            getSIMOperatorNumeric().equals(regOperator)) {
+            Log.i(LOG_TAG,"EONS: Fetching EONS name from EF_PNN's first record");
+            getNameFromPnnRecord(1);
+        } else {
+            pnnDataPresent = false;
+            ((GSMPhone) phone).mSST.updateSpnDisplay();
+        }
+    }
+
+    /**
+     * Parse EF_SST data.
+     */
+    void handleSstData(byte[] data) {
+        try {
+            if (((GSMPhone)phone).mSimCard
+                    .isApplicationOnIcc(IccCardApplication.AppType.APPTYPE_SIM)) {
+                //2G Sim.
+                //Service no 51:   PLMN Network Name
+                //Service no 52:   Operator PLMN List
+                //Check if these services are allocated and activated.
+                sstPlmnOplValue = ((data[12]>>4) & 0x0F);
+                if (sstPlmnOplValue == 0x0F) {
+                    sstPlmnOplValue = PNN_OPL_ENABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 2G Sim,PNN and OPL services enabled "+sstPlmnOplValue);
+                } else if (sstPlmnOplValue == 0x03) {
+                    sstPlmnOplValue = ONLY_PNN_ENABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 2G Sim,PNN enabled, OPL disabled "+sstPlmnOplValue);
+                } else {
+                    sstPlmnOplValue = EONS_DISABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 2G Sim,PNN disabled, disabling EONS "+sstPlmnOplValue);
+                }
+            } else if (((GSMPhone)phone).mSimCard
+                    .isApplicationOnIcc(IccCardApplication.AppType.APPTYPE_USIM)) {
+                //3G Sim.
+                //Service no 45: PLMN Network Name
+                //Service no 46: Operator PLMN List
+                //Check if these services are available.
+                sstPlmnOplValue = ((data[5]>>4) & 0x03);
+                if (sstPlmnOplValue == 0x03) {
+                    sstPlmnOplValue = PNN_OPL_ENABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 3G Sim,PNN and OPL services enabled "+sstPlmnOplValue);
+                } else if (sstPlmnOplValue == 0x01) {
+                    sstPlmnOplValue = ONLY_PNN_ENABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 3G Sim,PNN enabled, OPL disabled "+sstPlmnOplValue);
+                } else {
+                    sstPlmnOplValue = EONS_DISABLED;
+                    Log.i(LOG_TAG,"EONS: SST: 3G Sim,PNN disabled, disabling EONS "+sstPlmnOplValue);
+                }
+            } else {
+                sstPlmnOplValue = EONS_DISABLED;
+                Log.e(LOG_TAG, "EONS: Unhandled SIM type, disabling EONS");
+            }
+
+            //Update the display if EONS is disabled.
+            if (sstPlmnOplValue == EONS_DISABLED) {
+                ((GSMPhone) phone).mSST.updateSpnDisplay();
+            }
+        } catch(Exception e){
+            Log.e(LOG_TAG,"EONS: Exception in processing SST Data " + e);
+       }
+    }
+
+    void useMEName() {
+        oplDataPresent = false;
+        pnnDataPresent = false;
+        ((GSMPhone) phone).mSST.updateSpnDisplay();
+    }
+
+    /**
+     * Fetch EONS name from PNN cache for given record number.
+     * @param record, PNN record number.
+     */
+    void getNameFromPnnRecord(int record) {
+        int length = 0;
+        if ((pnnCache == null) || (record > pnnCache.size() || record < 1)) {
+            //If the cache is null, there is an exception in reading
+            //records from EF_PNN file, display name form ME database.
+            Log.w(LOG_TAG,"EONS: pnnCache is null/Invalid PNN Rec, display name from ME DB");
+            useMEName();
+            return;
+        }
+        Log.i(LOG_TAG,"Number of PNN records = " + pnnCache.size());
+
+        try {
+            byte[] data = (byte[]) pnnCache.get(record - 1);
+            Log.i(LOG_TAG,"EONS: PNN record number " + record + ", hex data " +
+                  IccUtils.bytesToHexString(data) );
+            pnnDataPresent = true;
+            //Some times the EF_PNN file may be present but the data contained it
+            //may be invalid, i.e 0xFF,checking validity of few mandatory feilds
+            //like long IEI and Legth of long name.
+            if ((data[0] != -1) && (data[1] != -1)) {
+                //Length of Long Name
+                length = data[1];
+                pnnDataLongName = IccUtils.networkNameToString(data, 2, length);
+                Log.i(LOG_TAG,"EONS: PNN longname length : " + length );
+                Log.i(LOG_TAG,"EONS: PNN longname : " + pnnDataLongName );
+                if ((data[length + 2] != -1) && (data[length + 3] != -1)) {
+                    pnnDataShortName = IccUtils.networkNameToString(data,
+                      length+4,data[length + 3]);
+                    Log.i(LOG_TAG,"EONS: PNN shortname length : " + data[length+3] );
+                    Log.d(LOG_TAG,"EONS: PNN shortname : " + pnnDataShortName );
+                } else {
+                    //Short Name is not mandatory and its absence is not an error
+                    Log.w(LOG_TAG, "EONS: EF_PNN: No short Name");
+                }
+            } else {
+                //Invaid EF_PNN data
+                pnnDataPresent = false;
+                Log.e(LOG_TAG, "EONS: EF_PNN: Invalid EF_PNN Data");
+          }
+        }catch(Exception e) {
+            Log.e(LOG_TAG, "EONS: Exception while processing PNN data " + e);
+        }
+        //Display EONS name
+        ((GSMPhone) phone).mSST.updateSpnDisplay();
+    }
+
+    /**
+     * Fetch EONS names for Available Networks from EF_PNN data.
+     * @param avlNetworks, ArrayList of Available Networks
+     * @return ArrayList Available Networks with EONS names if
+     * success,otherwise null
+     */
+    public ArrayList<NetworkInfo> getEonsAvailableNetworks(ArrayList<NetworkInfo> avlNetworks) {
+        ArrayList<NetworkInfo> eonsList = null;
+
+        if ((isEonsEnabled()) && (avlNetworks != null) && (avlNetworks.size() > 0)) {
+            int size = avlNetworks.size();
+            eonsList = new ArrayList<NetworkInfo>(size);
+            Log.i(LOG_TAG,"EONS: Available Networks List Size = " + size);
+            for (int i = 0;i < size;i++) {
+                 String pnnName = null;
+                 NetworkInfo ni;
+
+                 ni = (NetworkInfo) avlNetworks.get(i);
+                 pnnName = getEonsNameFromPnn(ni.getOperatorNumeric());
+                 Log.i(LOG_TAG,"EONS: PLMN=" + ni.getOperatorNumeric() + " ME Name="
+                   + ni.getOperatorAlphaLong() + " PNN Name=" + pnnName);
+                 if (pnnName == null) {
+                     pnnName = ni.getOperatorAlphaLong();
+                 }
+                 eonsList.add (new NetworkInfo(pnnName,ni.getOperatorAlphaShort(),
+                        ni.getOperatorNumeric(),ni.getState()));
+            }
+        } else {
+            Log.w(LOG_TAG,"EONS: EONS Disabled/Available Networks List is empty");
+        }
+        return eonsList;
+    }
+
+    /**
+     * Fetch EONS name for given PLMN from EF_PNN data.
+     * @param plmn, PLMN of the Available Network
+     * @return EONS name if success,otherwise null
+     */
+    private String getEonsNameFromPnn(String plmn) {
+        String name = null;
+        int count = 0;
+        int ind = 0;
+        int simPlmn[] = {0,0,0,0,0,0};
+        int bcchPlmn[] = {0,0,0,0,0,0};
+        short recNum = 0;
+        if (oplCache == null) {
+            Log.w(LOG_TAG,"EONS: getEonsNameFromPnn() oplCache is null.");
+            return name;
+        }
+        count = oplCache.size();
+        Log.i(LOG_TAG,"EONS: getEonsNameFromPnn() Number of OPL records = " + count);
+        try {
+            for (ind = 0; ind < count; ind++) {
+                 byte[] data = (byte[]) oplCache.get(ind);
+
+                 //Split the OPL PLMN data into digits
+                 simPlmn = getSimPlmnDigits(data);
+
+                 //Convert bcch plmn from ASCII to bcd
+                 bcchPlmn = getRegOperatorPlmnDigits(plmn);
+
+                 recNum  = (short)(data[7]&0xff);
+                 if (matchSimPlmn(simPlmn,bcchPlmn,plmn.length())) {
+                     if ((pnnCache == null) || (recNum > pnnCache.size() || recNum < 1)) {
+                         Log.w(LOG_TAG,"EONS: getEonsNameFromPnn(), pnnCache is null/Invalid PNN Rec");
+                     } else {
+                         byte[] data1 = (byte[]) pnnCache.get(recNum - 1);
+                         if ((data1[0] != -1) && (data1[1] != -1)) {
+                             name = IccUtils.networkNameToString(data1, 2, data1[1]);
+                             Log.i(LOG_TAG,"EONS: getEonsNameFromPnn() Long Name: " + name );
+                         }
+                     }
+                     break;
+                 }
+            }
+
+            if (ind >= count) {
+                Log.w(LOG_TAG,"EONS: getEonsNameFromPnn(),No matching OPL record found");
+                name = null;
+            }
+        } catch (Exception e) {
+            Log.e(LOG_TAG,"EONS: getEonsNameFromPnn(),Exception while processing OPL data " + e);
+            name = null;
+        }
+        return name;
+    }
+
+    public int getSstPlmnOplValue() {
+        return sstPlmnOplValue;
+    }
+
     protected void log(String s) {
         Log.d(LOG_TAG, "[SIMRecords] " + s);
+    }
+
+    /**
+     * Return 1 if "Restriction of menu options for manual PLMN selection" bit is
+     * set in EF_CSP, otherwise return 0
+     */
+    public int getCspPlmn() {
+        return cspPlmn;
+    }
+
+    /**
+     * Process EF_CSP data and check whether Network Operator Selection menu item
+     * is to be Enabled/Disabled
+     */
+    private void handleEfCspData(byte[] data) {
+        //As per spec CPHS4_2.WW6, CPHS B.4.7.1, elementary file EF_CSP contians
+        //CPHS defined 18 bytes (i.e 9 service groups info) and additional
+        //data specific to operator.
+        int usedCspGroups = 13;
+        //This is the Servive group number of the service we need to check.
+        //This represents Value Added Services Group.
+        byte valueAddedServicesGroup = (byte)0xC0;
+        int i = 0;
+
+        for (i = 0;i < usedCspGroups;i++) {
+             if (data[2 * i] == valueAddedServicesGroup) {
+                 Log.i(LOG_TAG, "CSP: Sevice Group 0xC0, value " + data[(2 * i) + 1]);
+                 if ((data[(2 * i) + 1] & 0x80) == 0x80) {
+                     //Bit 8 is for Restriction of menu options for manual PLMN selection.
+                     //Network Operator Selection menu should be enabled.
+                     cspPlmn = 1;
+                 } else {
+                     cspPlmn = 0;
+                     //Network Operator Selection menu should be disabled.
+                     //Network Selection Mode should be set to Automatic.
+                     Message msg = obtainMessage(EVENT_AUTO_SELECT_DONE);
+                     phone.setNetworkSelectionModeAutomatic(msg);
+                 }
+                 return;
+             }
+        }
+
+        Log.w(LOG_TAG, "Value Added Service Group (0xC0), not found in EF CSP");
     }
 
 }

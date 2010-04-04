@@ -23,6 +23,7 @@ import android.os.Message;
 import android.os.PowerManager;
 import android.os.Registrant;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.util.Config;
 import android.util.Log;
 import android.telephony.PhoneNumberUtils;
@@ -356,6 +357,18 @@ public class GsmConnection extends Connection {
             case CallFailCause.FDN_BLOCKED:
                 return DisconnectCause.FDN_BLOCKED;
 
+                // Display the following call fail cause only
+                // when Adapt feature is enabled.
+            case CallFailCause.IMSI_UNKNOWN_IN_VLR:
+                if (SystemProperties.getBoolean("persist.cust.tel.adapt", false)) {
+                    return DisconnectCause.IMSI_UNKNOWN_IN_VLR;
+                }
+
+            case CallFailCause.IMEI_NOT_ACCEPTED:
+                if (SystemProperties.getBoolean("persist.cust.tel.adapt", false)) {
+                    return DisconnectCause.IMEI_NOT_ACCEPTED;
+                }
+
             case CallFailCause.ERROR_UNSPECIFIED:
             case CallFailCause.NORMAL_CLEARING:
             default:
@@ -532,25 +545,19 @@ public class GsmConnection extends Connection {
         if (PhoneNumberUtils.is12Key(c)) {
             owner.cm.sendDtmf(c, h.obtainMessage(EVENT_DTMF_DONE));
         } else if (c == PhoneNumberUtils.PAUSE) {
-            // From TS 22.101:
-
-            // "The first occurrence of the "DTMF Control Digits Separator"
-            //  shall be used by the ME to distinguish between the addressing
-            //  digits (i.e. the phone number) and the DTMF digits...."
-
-            if (nextPostDialChar == 1) {
-                // The first occurrence.
-                // We don't need to pause here, but wait for just a bit anyway
-                h.sendMessageDelayed(h.obtainMessage(EVENT_PAUSE_DONE),
-                                            PAUSE_DELAY_FIRST_MILLIS);
-            } else {
-                // It continues...
-                // "Upon subsequent occurrences of the separator, the UE shall
-                //  pause again for 3 seconds (\u00B1 20 %) before sending any
-                //  further DTMF digits."
-                h.sendMessageDelayed(h.obtainMessage(EVENT_PAUSE_DONE),
+	    // From TS 22.101:
+	    // It continues...
+	    // Upon the called party answering the UE shall send the DTMF digits
+	    // automatically to the network after a delay of 3 seconds(± 20 %).
+	    // The digits shall be sent according to the procedures and timing
+	    // specified in 3GPP TS 24.008 [13]. The first occurrence of the
+	    // "DTMF Control Digits Separator" shall be used by the ME to
+	    // distinguish between the addressing digits (i.e. the phone number)
+	    // and the DTMF digits. Upon subsequent occurrences of the separator,
+	    // the UE shall pause again for 3 seconds (± 20 %) before sending
+	    // any further DTMF digits.
+	    h.sendMessageDelayed(h.obtainMessage(EVENT_PAUSE_DONE),
                                             PAUSE_DELAY_MILLIS);
-            }
         } else if (c == PhoneNumberUtils.WAIT) {
             setPostDialState(PostDialState.WAIT);
         } else if (c == PhoneNumberUtils.WILD) {

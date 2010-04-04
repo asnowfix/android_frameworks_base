@@ -136,4 +136,19 @@ public interface TelephonyProperties
      * monotonically, regardless of reboots.
      */
     static final String PROPERTY_CDMA_MSG_ID = "persist.radio.cdma.msgid";
+
+    /**
+     * Set to true to indicate that the modem needs to be reset
+     * when there is a radio technology change.
+     */
+    static final String PROPERTY_RESET_ON_RADIO_TECH_CHANGE = "persist.radio.reset_on_switch";
+
+    /**
+     * Indicates whether sms should be sent in synchronous manner.
+     * Type: boolean ( false = asynchronous, true = send next queued sms after
+     * making sure previous sms was sent) */
+    static final String SMS_SYNCHRONOUS_SENDING = "persist.radio.sms_sync_sending";
+
+    /** The delay between sms sending retries */
+    static final String PROPERTY_SMS_RETRY_DELAY = "persist.radio.sms_retry_delay";
 }

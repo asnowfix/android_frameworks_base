@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
+ * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -92,6 +93,7 @@ public abstract class PhoneBase extends Handler implements Phone {
     protected static final int EVENT_SET_CLIR_COMPLETE              = 18;
     protected static final int EVENT_REGISTERED_TO_NETWORK          = 19;
     protected static final int EVENT_SET_VM_NUMBER_DONE             = 20;
+    protected static final int EVENT_GET_NETWORKS_DONE              = 200;
     // Events for CDMA support
     protected static final int EVENT_GET_DEVICE_IDENTITY_DONE       = 21;
     protected static final int EVENT_RUIM_RECORDS_LOADED            = 22;
@@ -114,6 +116,8 @@ public abstract class PhoneBase extends Handler implements Phone {
     boolean mDoesRilSendMultipleCallRing;
     int mCallRingContinueToken = 0;
     int mCallRingDelay;
+    public boolean mIsTheCurrentActivePhone = true;
+    private boolean mModemPowerSaveStatus = false;
 
     /**
      * Set a system property, unless we're in unit test mode
@@ -226,6 +230,8 @@ public abstract class PhoneBase extends Handler implements Phone {
     public void dispose() {
         synchronized(PhoneProxy.lockForRadioTechnologyChange) {
             mCM.unSetOnCallRing(this);
+            mDataConnection.onCleanUpConnection(false, REASON_RADIO_TURNED_OFF);
+            mIsTheCurrentActivePhone = false;
         }
     }
 
@@ -240,6 +246,11 @@ public abstract class PhoneBase extends Handler implements Phone {
     public void handleMessage(Message msg) {
         AsyncResult ar;
 
+        if (!mIsTheCurrentActivePhone) {
+            Log.e(LOG_TAG, "Received message " + msg +
+                    "[" + msg.what + "] while being destroyed. Ignoring.");
+            return;
+        }
         switch(msg.what) {
             case EVENT_CALL_RING:
                 Log.d(LOG_TAG, "Event EVENT_CALL_RING Received state=" + getState());
@@ -357,6 +368,46 @@ public abstract class PhoneBase extends Handler implements Phone {
     // Inherited documentation suffices.
     public void unregisterForInCallVoicePrivacyOff(Handler h){
         mCM.unregisterForInCallVoicePrivacyOff(h);
+    }
+
+    public void setOnUnsolOemHookExtApp(Handler h, int what, Object obj) {
+        mCM.setOnUnsolOemHookExtApp(h, what, obj);
+    }
+
+    public void unSetOnUnsolOemHookExtApp(Handler h) {
+        mCM.unSetOnUnsolOemHookExtApp(h);
+    }
+
+    public void registerForCdmaFwdBurstDtmf(Handler h, int what, Object obj) {
+        mCM.registerForCdmaFwdBurstDtmf(h, what, obj);
+    }
+
+    public void unregisterForCdmaFwdBurstDtmf(Handler h) {
+        mCM.unregisterForCdmaFwdBurstDtmf(h);
+    }
+
+    public void registerForCdmaFwdContDtmfStart(Handler h, int what, Object obj) {
+        mCM.registerForCdmaFwdContDtmfStart(h, what, obj);
+    }
+
+    public void unregisterForCdmaFwdContDtmfStart(Handler h) {
+        mCM.unregisterForCdmaFwdContDtmfStart(h);
+    }
+
+    public void registerForCdmaFwdContDtmfStop(Handler h, int what, Object obj) {
+        mCM.registerForCdmaFwdContDtmfStop(h, what, obj);
+    }
+
+    public void unregisterForCdmaFwdContDtmfStop(Handler h) {
+        mCM.unregisterForCdmaFwdContDtmfStop(h);
+    }
+
+    public void registerForCallReestablishInd(Handler h, int what, Object obj) {
+        mCM.registerForCallReestablishInd(h, what, obj);
+    }
+
+    public void unregisterForCallReestablishInd(Handler h) {
+        mCM.unregisterForCallReestablishInd(h);
     }
 
     // Inherited documentation suffices.
@@ -731,6 +782,10 @@ public abstract class PhoneBase extends Handler implements Phone {
         mCM.invokeOemRilRequestRaw(data, response);
     }
 
+    public void invokeDepersonalization(String pin, int type, Message response) {
+        mCM.invokeDepersonalization(pin, type, response);
+    }
+
     public void invokeOemRilRequestStrings(String[] strings, Message response) {
         mCM.invokeOemRilRequestStrings(strings, response);
     }
@@ -1024,4 +1079,52 @@ public abstract class PhoneBase extends Handler implements Phone {
                     + " mCallRingContinueToken=" + mCallRingContinueToken);
         }
     }
+
+    /**
+     * Checks whether the modem is in power save mode
+     * @return true if modem is in power save mode
+     */
+    public boolean isModemPowerSave() {
+        return mModemPowerSaveStatus;
+    }
+
+    /**
+     * Update modem power save status flag as per the argument passed
+     */
+    public void setPowerSaveStatus(boolean value) {
+        mModemPowerSaveStatus = value;
+    }
+
+    public int getCspPlmnStatus() {
+        Log.e(LOG_TAG, "method getCspPlmnStatus is not supported in this radio technology");
+        return 0;
+    }
+
+    public int getPhoneTypeFromNetworkType() {
+
+        int preferredNetworkMode = RILConstants.PREFERRED_NETWORK_MODE;
+        Context context = getContext();
+        int networkMode = Settings.Secure.getInt(context.getContentResolver(),
+                Settings.Secure.PREFERRED_NETWORK_MODE, preferredNetworkMode);
+
+        if ((networkMode == RILConstants.NETWORK_MODE_CDMA)
+                || (networkMode == RILConstants.NETWORK_MODE_CDMA_NO_EVDO)
+                || (networkMode == RILConstants.NETWORK_MODE_EVDO_NO_CDMA)) {
+            return RILConstants.CDMA_PHONE;
+        } else if ((networkMode == RILConstants.NETWORK_MODE_WCDMA_PREF)
+                || (networkMode == RILConstants.NETWORK_MODE_GSM_ONLY)
+                || (networkMode == RILConstants.NETWORK_MODE_WCDMA_ONLY)
+                || (networkMode == RILConstants.NETWORK_MODE_GSM_UMTS)) {
+            return RILConstants.GSM_PHONE;
+        } else if (networkMode == RILConstants.NETWORK_MODE_GLOBAL) {
+            if (getPhoneType() == Phone.PHONE_TYPE_CDMA) {
+                return RILConstants.CDMA_PHONE;
+            } else if (getPhoneType() == Phone.PHONE_TYPE_GSM) {
+                return RILConstants.GSM_PHONE;
+            }
+        }
+
+        return RILConstants.NO_PHONE;
+    }
+
 }

@@ -45,6 +45,7 @@ extern "C" {
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/system_properties.h>
 }
 
 // When you enable this, as well as DEBUG_REFS=1 and
@@ -216,6 +217,7 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
         const sp<ICameraClient>& cameraClient, pid_t clientPid)
 {
     int callingPid = getCallingPid();
+    char value[PROPERTY_VALUE_MAX];
     LOGD("Client::Client E (pid %d)", callingPid);
     mCameraService = cameraService;
     mCameraClient = cameraClient;
@@ -234,7 +236,11 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
                              CAMERA_MSG_FOCUS);
 
     mMediaPlayerClick = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
+    // Commenting Beep temporarily for camcorder to work
+    property_get("ro.product.device",value," ");
+    if(strcmp(value,"qsd8250_surf") || strcmp(value,"qsd8250_surf"))
     mMediaPlayerBeep = newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
+
     mOverlayW = 0;
     mOverlayH = 0;
 
@@ -419,6 +425,9 @@ void CameraService::Client::disconnect()
     // Release the held overlay resources.
     if (mUseOverlay)
     {
+        /* Release previous overlay handle */
+	if(mSurface != NULL)
+            mSurface->releaseOverlay();
         mOverlayRef = 0;
     }
     mHardware.clear();
@@ -441,7 +450,7 @@ status_t CameraService::Client::setPreviewDisplay(const sp<ISurface>& surface)
     Mutex::Autolock surfaceLock(mSurfaceLock);
     result = NO_ERROR;
     // asBinder() is safe on NULL (returns NULL)
-    if (surface->asBinder() != mSurface->asBinder()) {
+    if ( surface->asBinder() != mSurface->asBinder() ) {
         if (mSurface != 0) {
             LOGD("clearing old preview surface %p", mSurface.get());
             if ( !mUseOverlay)
@@ -459,9 +468,10 @@ status_t CameraService::Client::setPreviewDisplay(const sp<ISurface>& surface)
         mOverlayRef = 0;
         // If preview has been already started, set overlay or register preview
         // buffers now.
-        if (mHardware->previewEnabled()) {
+        if (mHardware->previewEnabled() || mUseOverlay ) {
             if (mUseOverlay) {
-                result = setOverlay();
+                if( mSurface != NULL)
+                    result = setOverlay();
             } else if (mSurface != 0) {
                 result = registerPreviewBuffers();
             }
@@ -563,6 +573,9 @@ status_t CameraService::Client::setOverlay()
         sp<Overlay> dummy;
         mHardware->setOverlay( dummy );
         mOverlayRef = 0;
+        /* Release previous overlay handle */
+        if(mSurface != NULL)
+	    mSurface->releaseOverlay();
     }
 
     status_t ret = NO_ERROR;
@@ -576,7 +589,7 @@ status_t CameraService::Client::setOverlay()
             // wait in the createOverlay call if the previous overlay is in the 
             // process of being destroyed.
             for (int retry = 0; retry < 50; ++retry) {
-                mOverlayRef = mSurface->createOverlay(w, h, OVERLAY_FORMAT_DEFAULT);
+                mOverlayRef = mSurface->createOverlay(w, h, OVERLAY_FORMAT_YCbCr_420_SP);
                 if (mOverlayRef != NULL) break;
                 LOGD("Overlay create failed - retrying");
                 usleep(20000);
@@ -740,8 +753,8 @@ void CameraService::Client::stopRecording()
             mMediaPlayerBeep->start();
         }
 
-        mHardware->stopRecording();
         mHardware->disableMsgType(CAMERA_MSG_VIDEO_FRAME);
+        mHardware->stopRecording();
         LOGD("stopRecording(), hardware stopped OK");
     }
 

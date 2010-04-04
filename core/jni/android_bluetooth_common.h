@@ -19,9 +19,9 @@
 #define ANDROID_BLUETOOTH_COMMON_H
 
 // Set to 0 to enable verbose, debug, and/or info bluetooth logging
-#define LOG_NDEBUG 1
-#define LOG_NDDEBUG 1
-#define LOG_NIDEBUG 1
+//#define LOG_NDEBUG 0
+//#define LOG_NDDEBUG 0
+//#define LOG_NIDEBUG 0
 
 #include "jni.h"
 #include "utils/Log.h"

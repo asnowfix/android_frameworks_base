@@ -1,5 +1,6 @@
 //
 // Copyright 2005 The Android Open Source Project
+// Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
 //
 // Handle events, like key input and vsync.
 //
@@ -44,6 +45,10 @@
 #ifdef HAVE_ANDROID_OS
 # include <sys/limits.h>        /* not part of Linux */
 #endif
+#ifdef QCOM_TEST_ONLY
+#include <linux/fb.h>
+#include <linux/input.h>
+#endif
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 
@@ -75,6 +80,10 @@ namespace android {
 
 static const char *WAKE_LOCK_ID = "KeyEvents";
 static const char *device_path = "/dev/input";
+#ifdef QCOM_TEST_ONLY
+static const char *fb_devicename = "/dev/graphics/fb0";
+#endif
+
 
 /* return the larger integer */
 static inline int max(int v1, int v2)
@@ -97,6 +106,9 @@ EventHub::EventHub(void)
     , mDevicesById(0), mNumDevicesById(0)
     , mOpeningDevices(0), mClosingDevices(0)
     , mDevices(0), mFDs(0), mFDCount(0), mOpened(false)
+#ifdef HAVE_TSLIB
+    , mTS(), numOfEventsSent(0), samp()
+#endif
 {
     acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_ID);
 #ifdef EV_SW
@@ -316,7 +328,10 @@ bool EventHub::getEvent(int32_t* outDeviceId, int32_t* outType,
     int res;
     int pollres;
     struct input_event iev;
-
+#ifdef QCOM_TEST_ONLY
+    static int fb_status = 1;
+    int fb_dev,ret;
+#endif
     // Note that we only allow one caller to getEvent(), so don't need
     // to do locking here...  only when adding/removing devices.
 
@@ -326,53 +341,87 @@ bool EventHub::getEvent(int32_t* outDeviceId, int32_t* outType,
     }
 
     while(1) {
-
-        // First, report any devices that had last been added/removed.
-        if (mClosingDevices != NULL) {
-            device_t* device = mClosingDevices;
-            LOGV("Reporting device closed: id=0x%x, name=%s\n",
-                 device->id, device->path.string());
-            mClosingDevices = device->next;
-            *outDeviceId = device->id;
-            if (*outDeviceId == mFirstKeyboardId) *outDeviceId = 0;
-            *outType = DEVICE_REMOVED;
-            delete device;
-            return true;
-        }
-        if (mOpeningDevices != NULL) {
-            device_t* device = mOpeningDevices;
-            LOGV("Reporting device opened: id=0x%x, name=%s\n",
-                 device->id, device->path.string());
-            mOpeningDevices = device->next;
-            *outDeviceId = device->id;
-            if (*outDeviceId == mFirstKeyboardId) *outDeviceId = 0;
-            *outType = DEVICE_ADDED;
-            return true;
-        }
-
-        release_wake_lock(WAKE_LOCK_ID);
-
-        pollres = poll(mFDs, mFDCount, -1);
-
-        acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_ID);
-
-        if (pollres <= 0) {
-            if (errno != EINTR) {
-                LOGW("select failed (errno=%d)\n", errno);
-                usleep(100000);
+#ifdef HAVE_TSLIB
+        //Checks if we have to send any more events read by input-raw plugin.
+        if(!samp.total_events) {
+#endif
+            // First, report any devices that had last been added/removed.
+            if (mClosingDevices != NULL) {
+                device_t* device = mClosingDevices;
+                LOGV("Reporting device closed: id=0x%x, name=%s\n",
+                     device->id, device->path.string());
+                mClosingDevices = device->next;
+                *outDeviceId = device->id;
+                if (*outDeviceId == mFirstKeyboardId) *outDeviceId = 0;
+                *outType = DEVICE_REMOVED;
+                delete device;
+                return true;
             }
-            continue;
-        }
+            if (mOpeningDevices != NULL) {
+                device_t* device = mOpeningDevices;
+                LOGV("Reporting device opened: id=0x%x, name=%s\n",
+                     device->id, device->path.string());
+                mOpeningDevices = device->next;
+                *outDeviceId = device->id;
+                if (*outDeviceId == mFirstKeyboardId) *outDeviceId = 0;
+                *outType = DEVICE_ADDED;
+                return true;
+            }
 
-        //printf("poll %d, returned %d\n", mFDCount, pollres);
+            release_wake_lock(WAKE_LOCK_ID);
 
-        // mFDs[0] is used for inotify, so process regular events starting at mFDs[1]
-        for(i = 1; i < mFDCount; i++) {
-            if(mFDs[i].revents) {
-                LOGV("revents for %d = 0x%08x", i, mFDs[i].revents);
-                if(mFDs[i].revents & POLLIN) {
-                    res = read(mFDs[i].fd, &iev, sizeof(iev));
-                    if (res == sizeof(iev)) {
+            pollres = poll(mFDs, mFDCount, -1);
+
+            acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_ID);
+
+            if (pollres <= 0) {
+                if (errno != EINTR) {
+                    LOGW("select failed (errno=%d)\n", errno);
+                    usleep(100000);
+                }
+                continue;
+            }
+
+            //printf("poll %d, returned %d\n", mFDCount, pollres);
+
+            // mFDs[0] is used for inotify, so process regular events starting at mFDs[1]
+            for(i = 1; i < mFDCount; i++) {
+                if(mFDs[i].revents) {
+                    LOGV("revents for %d = 0x%08x", i, mFDs[i].revents);
+                    if(mFDs[i].revents & POLLIN) {
+#ifdef HAVE_TSLIB
+                        LOGV("Inside EventHub.cpp with mFDs[i].fd=%d \n", mFDs[i].fd);
+                        if (mTS != NULL) {
+                            if (mFDs[i].fd != mTS->fd ) {
+                                LOGV("mFDs[%d].fd = %d and mTS->fd = %d", i, mFDs[i].fd, mTS->fd);
+#endif
+                                res = read(mFDs[i].fd, &iev, sizeof(iev));
+#ifdef HAVE_TSLIB
+                            }
+                            else{
+                                LOGI("mTS->fd = %d", mTS->fd);
+                                LOGI("tslib: calling ts_read from eventhub\n");
+                                res = ts_read(mTS, &samp, 1);
+
+                                if (res < 0) {
+                                    LOGE("[EventHub.cpp:: After Poll] Error in ts_read()\n");
+                                }
+                                else {
+                                    numOfEventsSent = 0;
+                                    samp.tsIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+                        else {
+                            LOGE("ERROR in setup of mTS: mTS is NULL!\n");
+                        }
+#endif
+                        if (res == sizeof(iev)
+#ifdef HAVE_TSLIB
+                            || ((iev.code == 0x1d || iev.code == 0x1e) && res >= 0)
+#endif
+                        ) {
                         LOGV("%s got: t0=%d, t1=%d, type=%d, code=%d, v=%d",
                              mDevices[i]->path.string(),
                              (int) iev.time.tv_sec, (int) iev.time.tv_usec,
@@ -385,6 +434,34 @@ bool EventHub::getEvent(int32_t* outDeviceId, int32_t* outType,
                             err = mDevices[i]->layoutMap->map(iev.code, outKeycode, outFlags);
                             LOGV("iev.code=%d outKeycode=%d outFlags=0x%08x err=%d\n",
                                 iev.code, *outKeycode, *outFlags, err);
+#ifdef QCOM_TEST_ONLY
+                            /*The LCD/BL will be toggled ON/OFF by pressing KEY_HOME for testing purposes  */
+                            if(iev.code == KEY_HOME) {
+                                if(iev.value == 0) {
+                                    fb_dev = open(fb_devicename, O_RDWR);
+                                    if(fb_dev < 0) {
+                                        LOGE("EventHub>> FB Device open failed\n");
+                                    } else {
+                                        if(fb_status) {
+                                            LOGI("EventHub>> turn off LCD\n");
+                                            ret = ioctl(fb_dev,FBIOBLANK, FB_BLANK_POWERDOWN);
+                                            if(ret < 0)
+                                                LOGE("EventHub>> FB blank IOCTL Failed return value=%d\n",ret);
+                                            fb_status = 0;
+                                        } else {
+                                            LOGI("EventHub>> turn on LCD\n");
+                                            ret = ioctl(fb_dev,FBIOBLANK, FB_BLANK_UNBLANK);
+                                            if(ret < 0)
+                                                LOGE("EventHub>> FB unblank IOCTL Failed return value=%d\n",ret);
+                                            fb_status = 1;
+                                        }
+                                        ret = close(fb_dev);
+                                    }
+                                }
+                                /* Drop the event and avoid propogation of the event to applications */
+                                err=-1;
+                            }
+#endif
                             if (err != 0) {
                                 *outKeycode = 0;
                                 *outFlags = 0;
@@ -402,16 +479,50 @@ bool EventHub::getEvent(int32_t* outDeviceId, int32_t* outType,
                             LOGE("could not get event (wrong size: %d)", res);
                         }
                         continue;
+                        }
                     }
                 }
             }
-        }
-        
+
         // read_notify() will modify mFDs and mFDCount, so this must be done after
         // processing all other events.
-        if(mFDs[0].revents & POLLIN) {
-            read_notify(mFDs[0].fd);
+            if(mFDs[0].revents & POLLIN) {
+                read_notify(mFDs[0].fd);
+            }
+#ifdef HAVE_TSLIB
         }
+
+        if(samp.total_events) {
+            *outDeviceId = mDevices[samp.tsIndex]->id;
+            *outType = samp.ev[numOfEventsSent].type;
+            *outScancode = samp.ev[numOfEventsSent].code;
+            if (samp.ev[numOfEventsSent].type == EV_KEY) {
+                err = mDevices[samp.tsIndex]->layoutMap->map(samp.ev[numOfEventsSent].code, outKeycode, outFlags);
+                if (err != 0) {
+                    *outKeycode = 0;
+                    *outFlags = 0;
+                }
+            }
+            else {
+                *outKeycode =  samp.ev[numOfEventsSent].code;
+            }
+            if(*outType == EV_ABS) {
+                if(*outScancode == ABS_X)
+                    *outValue = samp.x;
+                if(*outScancode == ABS_Y)
+                    *outValue = samp.y;
+                if(*outScancode == ABS_PRESSURE)
+                    *outValue = samp.pressure;
+            }
+            else {
+                *outValue = samp.ev[numOfEventsSent].value;
+                *outWhen = s2ns(iev.time.tv_sec) + us2ns(iev.time.tv_usec);
+            }
+            if(++numOfEventsSent == samp.total_events)
+                samp.total_events = 0;
+            return true;
+        }
+#endif
     }
 }
 
@@ -420,9 +531,16 @@ bool EventHub::getEvent(int32_t* outDeviceId, int32_t* outType,
  */
 bool EventHub::openPlatformInput(void)
 {
-    /*
-     * Open platform-specific input device(s).
-     */
+#ifdef HAVE_TSLIB
+    mTS = (tsdev*)malloc(sizeof(struct tsdev));
+    if(mTS == NULL)
+    {
+          LOGE("No Memory");
+          return(false);
+    }
+    memset(mTS, 0, sizeof(struct tsdev));
+#endif
+
     int res;
 
     mFDCount = 1;
@@ -501,11 +619,17 @@ int EventHub::open_device(const char *deviceName)
     LOGV("Opening device: %s", deviceName);
 
     AutoMutex _l(mLock);
-
-    for (attempt = 0; attempt < 10; attempt++) {
+    
+    fd = open(deviceName, O_RDWR);
+    /* Input device open before it is created
+     * USB event is received before
+     * input device is created by the input subsystem
+     * Retry after 10 ms delay
+     */
+    int count = 10;
+    while(fd < 0 && (errno == EACCES) && count--) {
+        usleep(10000);
         fd = open(deviceName, O_RDWR);
-        if (fd >= 0) break;
-        usleep(100);
     }
     if(fd < 0) {
         LOGE("could not open %s, %s\n", deviceName, strerror(errno));
@@ -665,6 +789,16 @@ int EventHub::open_device(const char *deviceName)
     } else if (test_bit(BTN_TOUCH, key_bitmask)
             && test_bit(ABS_X, abs_bitmask) && test_bit(ABS_Y, abs_bitmask)) {
         device->classes |= CLASS_TOUCHSCREEN;
+#ifdef HAVE_TSLIB
+                mTS->fd = fd;
+
+                //Configure here
+                LOGV("Device name = %s, fd = %d", deviceName,fd);
+                LOGV("tslib: calling ts_config from eventhub\n");
+                if(ts_config(mTS)) {
+                    LOGE("Error in Configuring tslib. Device Name = %s \n", deviceName);
+                }
+#endif
     }
 
 #ifdef EV_SW

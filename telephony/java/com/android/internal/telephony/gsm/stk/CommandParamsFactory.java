@@ -21,7 +21,7 @@ import android.os.Handler;
 import android.os.Message;
 
 import com.android.internal.telephony.GsmAlphabet;
-import com.android.internal.telephony.gsm.SIMFileHandler;
+import com.android.internal.telephony.IccFileHandler;
 
 import java.util.Iterator;
 import java.util.List;
@@ -53,7 +53,7 @@ class CommandParamsFactory extends Handler {
     static final int REFRESH_UICC_RESET                     = 0x04;
 
     static synchronized CommandParamsFactory getInstance(RilMessageDecoder caller,
-            SIMFileHandler fh) {
+            IccFileHandler fh) {
         if (sInstance != null) {
             return sInstance;
         }
@@ -63,7 +63,7 @@ class CommandParamsFactory extends Handler {
         return null;
     }
 
-    private CommandParamsFactory(RilMessageDecoder caller, SIMFileHandler fh) {
+    private CommandParamsFactory(RilMessageDecoder caller, IccFileHandler fh) {
         mCaller = caller;
         mIconLoader = IconLoader.getInstance(this, fh);
     }
@@ -112,7 +112,10 @@ class CommandParamsFactory extends Handler {
         AppInterface.CommandType cmdType = AppInterface.CommandType
                 .fromInt(cmdDet.typeOfCommand);
         if (cmdType == null) {
-            sendCmdParams(ResultCode.CMD_TYPE_NOT_UNDERSTOOD);
+            // This PROACTIVE COMMAND is presently not handled. Hence set
+            // result code as BEYOND_TERMINAL_CAPABILITY in TR.
+            mCmdParams = new CommandParams(cmdDet);
+            sendCmdParams(ResultCode.BEYOND_TERMINAL_CAPABILITY);
             return;
         }
 
@@ -158,7 +161,7 @@ class CommandParamsFactory extends Handler {
             default:
                 // unsupported proactive commands
                 mCmdParams = new CommandParams(cmdDet);
-                sendCmdParams(ResultCode.CMD_TYPE_NOT_UNDERSTOOD);
+                sendCmdParams(ResultCode.BEYOND_TERMINAL_CAPABILITY);
                 return;
             }
         } catch (ResultException e) {
@@ -378,6 +381,12 @@ class CommandParamsFactory extends Handler {
         ctlv = searchForTag(ComprehensionTlvTag.ICON_ID, ctlvs);
         if (ctlv != null) {
             iconId = ValueParser.retrieveIconId(ctlv);
+        }
+
+        // parse duration
+        ctlv = searchForTag(ComprehensionTlvTag.DURATION, ctlvs);
+        if (ctlv != null) {
+            input.duration = ValueParser.retrieveDuration(ctlv);
         }
 
         input.minLen = 1;

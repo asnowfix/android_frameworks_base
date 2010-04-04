@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2006 The Android Open Source Project
+ * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -242,6 +243,12 @@ public interface CommandsInterface {
      */
     void registerForRUIMReady(Handler h, int what, Object obj);
     void unregisterForRUIMReady(Handler h);
+
+    /**
+     * Fires on any change in ICC status
+     */
+    void registerForIccStatusChanged(Handler h, int what, Object obj);
+    void unregisterForIccStatusChanged(Handler h);
 
     /**
      * unlike the register* methods, there's only one new SMS handler
@@ -548,6 +555,48 @@ public interface CommandsInterface {
       */
      void registerForResendIncallMute(Handler h, int what, Object obj);
      void unregisterForResendIncallMute(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Burst DTMF.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdBurstDtmf(Handler h, int what, Object obj);
+    void unregisterForCdmaFwdBurstDtmf(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Continuous DTMF
+     * Start.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdContDtmfStart(Handler h, int what, Object obj);
+    void unregisterForCdmaFwdContDtmfStart(Handler h);
+
+    /**
+     * Sets the handler for Event Notifications for CDMA Forward Continuous DTMF
+     * Stop.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCdmaFwdContDtmfStop(Handler h, int what, Object obj);
+    void unregisterForCdmaFwdContDtmfStop(Handler h);
+
+    /**
+     * Handlers for call re-establishment indications.
+     *
+     * @param h Handler for re-establishment messages.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForCallReestablishInd(Handler h, int what, Object obj);
+    void unregisterForCallReestablishInd(Handler h);
 
     /**
      * Supply the ICC PIN to the ICC card
@@ -1180,6 +1229,11 @@ public interface CommandsInterface {
 
     void invokeOemRilRequestStrings(String[] strings, Message response);
 
+    void setOnUnsolOemHookExtApp(Handler h, int what, Object obj);
+
+    void unSetOnUnsolOemHookExtApp(Handler h);
+
+    void invokeDepersonalization(String pin, int type, Message response);
 
     /**
      * Send TERMINAL RESPONSE to the SIM, after processing a proactive command

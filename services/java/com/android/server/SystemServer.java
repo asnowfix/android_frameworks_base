@@ -62,8 +62,6 @@ class ServerThread extends Thread {
         public void onChange(boolean selfChange) {
             boolean enableAdb = (Settings.Secure.getInt(mContentResolver,
                 Settings.Secure.ADB_ENABLED, 0) > 0);
-            // setting this secure property will start or stop adbd
-           SystemProperties.set("persist.service.adb.enable", enableAdb ? "1" : "0");
         }
     }
 
@@ -251,6 +249,7 @@ class ServerThread extends Thread {
                 Log.i(TAG, "Connectivity Service");
                 connectivity = ConnectivityService.getInstance(context);
                 ServiceManager.addService(Context.CONNECTIVITY_SERVICE, connectivity);
+                connectivity.startCne();
             } catch (Throwable e) {
                 Log.e(TAG, "Failure starting Connectivity Service", e);
             }

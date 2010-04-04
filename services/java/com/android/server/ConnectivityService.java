@@ -48,6 +48,10 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 
+import android.net.LinkRequirements;
+import android.net.LinkInfo;
+import com.android.server.CNE;
+
 /**
  * @hide
  */
@@ -95,6 +99,9 @@ public class ConnectivityService extends IConnectivityManager.Stub {
     private static ConnectivityService sServiceInstance;
 
     private Handler mHandler;
+
+    private CNE mCneService = null;
+    private boolean mCneStarted = false;
 
     // list of DeathRecipients used to make sure features are turned off when
     // a process dies
@@ -314,7 +321,15 @@ public class ConnectivityService extends IConnectivityManager.Stub {
             if (mNetworkPreference != preference) {
                 persistNetworkPreference(preference);
                 mNetworkPreference = preference;
-                enforcePreference();
+                if((SystemProperties.get(CNE.UseCne,"false").equals("true") ||
+                    SystemProperties.get(CNE.UseCne,"false").equals("TRUE")) &&
+                     CNE.isCndUp && mCneService != null) {
+                  /* send it to cne and it will handle it */
+                  mCneService.setDefaultConnectionNwPref(preference);
+                }
+                else {
+                    enforcePreference();
+                }
             }
         }
     }
@@ -778,7 +793,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
     private void handleDisconnect(NetworkInfo info) {
 
         int prevNetType = info.getType();
-
+        Log.d(TAG,"Got Network Disconnected from Driver nwtype="+prevNetType);
         mNetTrackers[prevNetType].setTeardownRequested(false);
         /*
          * If the disconnected network is not the active one, then don't report
@@ -1008,7 +1023,7 @@ public class ConnectivityService extends IConnectivityManager.Stub {
 
     private void handleConnect(NetworkInfo info) {
         int type = info.getType();
-
+        Log.d(TAG, "Got Network Connection Succ from Driver nwtype="+type);
         // snapshot isFailover, because sendConnectedBroadcast() resets it
         boolean isFailover = info.isFailover();
         NetworkStateTracker thisNet = mNetTrackers[type];
@@ -1021,10 +1036,14 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                         mNetAttributes[mActiveDefaultNetwork].mPriority >
                         mNetAttributes[type].mPriority) ||
                         mNetworkPreference == mActiveDefaultNetwork) {
-                        // don't accept this one
-                        if (DBG) Log.v(TAG, "Not broadcasting CONNECT_ACTION " +
-                                "to torn down network " + info.getTypeName());
-                        teardown(thisNet);
+                        if(!((SystemProperties.get(CNE.UseCne,"false").equals("true") ||
+                              SystemProperties.get(CNE.UseCne,"false").equals("TRUE"))&&
+                               CNE.isCndUp)) {
+                            // don't accept this one
+                            if (DBG) Log.v(TAG, "Not broadcasting CONNECT_ACTION " +
+                                    "to torn down network " + info.getTypeName());
+                            teardown(thisNet);
+                        }
                         return;
                 } else {
                     // tear down the other
@@ -1033,9 +1052,15 @@ public class ConnectivityService extends IConnectivityManager.Stub {
                     if (DBG) Log.v(TAG, "Policy requires " +
                             otherNet.getNetworkInfo().getTypeName() +
                             " teardown");
-                    if (!teardown(otherNet)) {
-                        Log.e(TAG, "Network declined teardown request");
-                        return;
+                    if(!((SystemProperties.get(CNE.UseCne,"false").equals("true") ||
+                           SystemProperties.get(CNE.UseCne,"false").equals("TRUE"))&&
+                            CNE.isCndUp)) {
+                        if (DBG) Log.i(TAG, "CNE To support Simultaneous Nws we"+
+                                 " will not tear down other nw");
+                        if (!teardown(otherNet)) {
+                            Log.e(TAG, "Network declined teardown request");
+                            return;
+                        }
                     }
                     if (isFailover) {
                         otherNet.releaseWakeLock();
@@ -1357,4 +1382,162 @@ public class ConnectivityService extends IConnectivityManager.Stub {
             }
         }
     }
+
+    /* CNE related methods. */
+    public void startCne(){
+        if(!mCneStarted){
+            if(SystemProperties.get(CNE.UseCne,"false").equals("true") ||
+                 SystemProperties.get(CNE.UseCne,"false").equals("TRUE")) {
+                    Log.v(TAG, "CNE starting up");
+                    /* sychronised to wait until cne creation so that
+                     * defualt connection can start.
+                     */
+                    synchronized(this){
+                        mCneService = new CNE(mContext, this);
+                        /* send the mNetworkPreference down to cne */
+                        mCneService.sendDefaultNwPref2Cne(mNetworkPreference);
+                        mCneStarted = true;
+                    }
+            }else{
+                Log.v(TAG, "CNE is disabled.");
+            }
+        }else{
+            Log.e(TAG, "CNE already Started");
+        }
+    }
+
+    public boolean isCneStarted(){
+        return mCneStarted;
+    }
+    /** {@hide} */
+    public boolean bringUpRat(int ratType){
+
+        Log.d(TAG, "Bring Up Rat called for rat="+ratType);
+        int networkType = 0;
+
+        if (ratType == CNE.CNE_RAT_WLAN)
+        {
+          networkType = ConnectivityManager.TYPE_WIFI;
+        }
+        else if (ratType == CNE.CNE_RAT_WWAN)
+        {
+          networkType = ConnectivityManager.TYPE_MOBILE;
+        }
+        NetworkStateTracker network = mNetTrackers[networkType];
+        if (network != null) {
+          network.setTeardownRequested(true);
+          Log.d(TAG, "Sending Network Connection Request to Driver.");
+          network.reconnect();
+          return true;
+        }
+        else
+          Log.d(TAG, "bringupRat network null");
+        return false;
+
+    }
+
+    /** {@hide} */
+    public boolean bringDownRat(int ratType){
+
+        int networkType = 0;
+
+        if (ratType == CNE.CNE_RAT_WLAN)
+        {
+          networkType = ConnectivityManager.TYPE_WIFI;
+        }
+        else if (ratType == CNE.CNE_RAT_WWAN)
+        {
+          networkType = ConnectivityManager.TYPE_MOBILE;
+        }
+        NetworkStateTracker network = mNetTrackers[networkType];
+        if (network != null) {
+          if (network.teardown())
+          {
+            network.setTeardownRequested(true);
+            return true;
+          }
+        }
+        return false;
+
+    }
+
+
+    /** {@hide} */
+    public boolean getLink(int role,
+                           LinkRequirements linkReqs,
+                           int mPid,
+                           IBinder listener){
+        if(mCneService != null) {
+            return mCneService.getLink(role,linkReqs,mPid,listener);
+        }
+        else {
+            Log.d(TAG, "mCneService is null");
+            return false;
+        }
+    }
+
+    /** {@hide} */
+    public boolean reportLinkSatisfaction(int role,
+                                          int mPid,
+                                          LinkInfo info,
+                                          boolean isSatisfied,
+                                          boolean isNotifyBetterCon){
+        if(mCneService != null) {
+            return mCneService.reportLinkSatisfaction(role,
+                                                      mPid,
+                                                      info,
+                                                      isSatisfied,
+                                                      isNotifyBetterCon);
+        }
+        else {
+            Log.d(TAG, "mCneService is null");
+            return false;
+        }
+    }
+
+    /** {@hide} */
+    public boolean switchLink(int role,
+                              int mPid,
+                              LinkInfo info,
+                              boolean isNotifyBetterLink){
+        if(mCneService != null) {
+            return mCneService.switchLink(role,
+                                          mPid,
+                                          info,
+                                          isNotifyBetterLink);
+        }
+        else {
+            Log.d(TAG, "mCneService is null");
+            return false;
+        }
+    }
+
+    /** {@hide} */
+    public boolean rejectSwitch(int role,
+                                int mPid,
+                                LinkInfo info,
+                                boolean isNotifyBetterLink){
+        if(mCneService != null) {
+            return mCneService.rejectSwitch(role,
+                                            mPid,
+                                            info,
+                                            isNotifyBetterLink);
+        }
+        else {
+            Log.d(TAG, "mCneService is null");
+            return false;
+        }
+    }
+
+    /** {@hide} */
+    public boolean releaseLink(int role,int mPid){
+        if(mCneService != null) {
+            return mCneService.releaseLink(role,mPid);
+        }
+        else {
+            Log.d(TAG, "mCneService is null");
+            return false;
+        }
+    }
+
 }

@@ -31,6 +31,7 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.provider.Checkin;
 import android.provider.Settings;
+import android.provider.Settings.Secure;
 import android.provider.Settings.SettingNotFoundException;
 import android.provider.Telephony.Intents;
 import android.telephony.ServiceState;
@@ -62,6 +63,11 @@ import java.util.TimeZone;
  */
 final class CdmaServiceStateTracker extends ServiceStateTracker {
     static final String LOG_TAG = "CDMA";
+
+    // Used for CDMA subscription mode
+    private static final int CDMA_SUBSCRIPTION_RUIM = 0;
+    private static final int CDMA_SUBSCRIPTION_NV = 1;
+
 
     CDMAPhone phone;
     CdmaCellLocation cellLoc;
@@ -182,6 +188,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         cm.registerForRUIMReady(this, EVENT_RUIM_READY, null);
 
         cm.registerForNVReady(this, EVENT_NV_READY, null);
+        cm.registerForRUIMLockedOrAbsent(this, EVENT_RUIM_LOCKED_OR_ABSENT, null);
         phone.registerForEriFileLoaded(this, EVENT_ERI_FILE_LOADED, null);
         cm.registerForCdmaOtaProvision(this,EVENT_OTA_PROVISION_STATUS_CHANGE, null);
 
@@ -287,12 +294,28 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         cdmaForSubscriptionInfoReadyRegistrants.remove(h);
     }
 
+    /**
+     * Save current source of cdma subscription
+     * @param source - 1 for NV, 0 for RUIM
+     */
+    private void saveCdmaSubscriptionSource(int source) {
+        Log.d(LOG_TAG, "Storing cdma subscription source: " + source);
+        Secure.putInt(phone.getContext().getContentResolver(),
+                Secure.CDMA_SUBSCRIPTION_MODE,
+                source );
+    }
+
     @Override
     public void handleMessage (Message msg) {
         AsyncResult ar;
         int[] ints;
         String[] strings;
 
+        if (!phone.mIsTheCurrentActivePhone) {
+            Log.e(LOG_TAG, "Received message " + msg +
+                    "[" + msg.what + "] while being destroyed. Ignoring.");
+            return;
+        }
         switch (msg.what) {
         case EVENT_RADIO_AVAILABLE:
             break;
@@ -301,6 +324,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             // The RUIM is now ready i.e if it was locked it has been
             // unlocked. At this stage, the radio is already powered on.
             isSubscriptionFromRuim = true;
+            saveCdmaSubscriptionSource(CDMA_SUBSCRIPTION_RUIM);
             if (mNeedToRegForRuimLoaded) {
                 phone.mRuimRecords.registerForRecordsLoaded(this,
                         EVENT_RUIM_RECORDS_LOADED, null);
@@ -319,6 +343,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
 
         case EVENT_NV_READY:
             isSubscriptionFromRuim = false;
+            saveCdmaSubscriptionSource(CDMA_SUBSCRIPTION_NV);
             // For Non-RUIM phones, the subscription information is stored in
             // Non Volatile. Here when Non-Volatile is ready, we can poll the CDMA
             // subscription info.
@@ -326,6 +351,10 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             pollState();
             // Signal strength polling stops when radio is off.
             queueNextSignalStrengthPoll();
+            break;
+
+        case EVENT_RUIM_LOCKED_OR_ABSENT:
+            saveCdmaSubscriptionSource(CDMA_SUBSCRIPTION_RUIM);
             break;
 
         case EVENT_RADIO_STATE_CHANGED:
@@ -1068,6 +1097,11 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
                 }
             }
 
+            phone.updateCurrentCarrierInProvider(operatorNumeric);
+
+            // Updates MCC MNC device configuration information
+            MccTable.updateMccMncConfiguration(phone, operatorNumeric);
+
             phone.setSystemProperty(TelephonyProperties.PROPERTY_OPERATOR_ISROAMING,
                     ss.getRoaming() ? "true" : "false");
 
@@ -1223,10 +1257,11 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     }
 
     /** code is registration state 0-5 from TS 27.007 7.2 */
-    private int
-    regCodeToServiceState(int code) {
+    private int regCodeToServiceState(int code) {
+        phone.setPowerSaveStatus(false);
         switch (code) {
         case 0: // Not searching and not registered
+            phone.setPowerSaveStatus(true);
             return ServiceState.STATE_OUT_OF_SERVICE;
         case 1:
             return ServiceState.STATE_IN_SERVICE;
@@ -1495,11 +1530,8 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     }
 
     private boolean getAutoTime() {
-        try {
-            return Settings.System.getInt(cr, Settings.System.AUTO_TIME) > 0;
-        } catch (SettingNotFoundException snfe) {
+      // Always returns true for CDMA mode
             return true;
-        }
     }
 
     private void saveNitzTimeZone(String zoneId) {
@@ -1528,7 +1560,6 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
      * @param time time set by network
      */
     private void setAndBroadcastNetworkSetTime(long time) {
-        SystemClock.setCurrentTimeMillis(time);
         Intent intent = new Intent(TelephonyIntents.ACTION_NETWORK_SET_TIME);
         intent.putExtra("time", time);
         phone.getContext().sendStickyBroadcast(intent);

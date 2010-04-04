@@ -77,6 +77,11 @@ interface IMountService
     void setAutoStartUms(boolean value);
 
     /**
+     * Get list of mount points.
+     */
+    String getMountPointList();
+
+    /**
      * Shuts down the MountService and gracefully unmounts all external media.
      */
     void shutdown();

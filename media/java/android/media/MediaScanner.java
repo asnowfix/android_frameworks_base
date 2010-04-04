@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
+ * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -510,7 +511,8 @@ public class MediaScanner
                     mFileType == MediaFile.FILE_TYPE_ASF ||
                     mFileType == MediaFile.FILE_TYPE_AMR ||
                     mFileType == MediaFile.FILE_TYPE_AWB ||
-                    mFileType == MediaFile.FILE_TYPE_WAV ) {
+                    mFileType == MediaFile.FILE_TYPE_WAV ||
+                    mFileType == MediaFile.FILE_TYPE_3GPA ) {
                 // we only extract metadata from MP3, M4A, 3GP, OGG, MID, WMA,
                 // WMV, ASF, AAC, AMR(amr-nb), AWB(amr-wb), FLAC and WAV files.
                 // check MP4 files, to determine if they contain only audio.

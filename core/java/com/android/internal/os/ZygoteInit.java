@@ -506,6 +506,14 @@ public class ZygoteInit {
          */
 
         if (parsedArgs.uid != 0) {
+            /*
+             * If the Process belong to AID_RADIO(1001) or AID_SYSTEM(1000)
+             * then add CAP_SYS_TIME (1<<25) Capability.
+             */
+            if(parsedArgs.uid == 1000 || parsedArgs.uid == 1001 ) {
+                parsedArgs.permittedCapabilities |= (1<<25);
+                parsedArgs.effectiveCapabilities |= (1<<25);
+            }
             try {
                 setCapabilities(parsedArgs.permittedCapabilities,
                                 parsedArgs.effectiveCapabilities);
@@ -533,7 +541,7 @@ public class ZygoteInit {
         String args[] = {
             "--setuid=1000",
             "--setgid=1000",
-            "--setgroups=1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,3001,3002,3003",
+            "--setgroups=1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,3001,3002,3003,3006",
             "--capabilities=130104352,130104352",
             "--runtime-init",
             "--nice-name=system_server",

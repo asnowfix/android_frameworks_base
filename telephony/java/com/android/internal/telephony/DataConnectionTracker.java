@@ -26,6 +26,7 @@ import android.provider.Settings;
 import android.provider.Settings.SettingNotFoundException;
 import android.text.TextUtils;
 import android.util.Log;
+import android.os.SystemProperties;
 
 import java.util.ArrayList;
 
@@ -133,20 +134,8 @@ public abstract class DataConnectionTracker extends Handler {
     protected static final String SECONDARY_DATA_RETRY_CONFIG =
             "max_retries=3, 5000, 5000, 5000";
 
-    /** Slow poll when attempting connection recovery. */
-    protected static final int POLL_NETSTAT_SLOW_MILLIS = 5000;
-    /** Default ping deadline, in seconds. */
-    protected static final int DEFAULT_PING_DEADLINE = 5;
     /** Default max failure count before attempting to network re-registration. */
     protected static final int DEFAULT_MAX_PDP_RESET_FAIL = 3;
-
-    /**
-     * After detecting a potential connection problem, this is the max number
-     * of subsequent polls before attempting a radio reset.  At this point,
-     * poll interval is 5 seconds (POLL_NETSTAT_SLOW_MILLIS), so set this to
-     * poll for about 2 more minutes.
-     */
-    protected static final int NO_RECV_POLL_LIMIT = 24;
 
     // 1 sec. default polling interval when screen is on.
     protected static final int POLL_NETSTAT_MILLIS = 1000;
@@ -154,8 +143,6 @@ public abstract class DataConnectionTracker extends Handler {
     protected static final int POLL_NETSTAT_SCREEN_OFF_MILLIS = 1000*60*10;
     // 2 min for round trip time
     protected static final int POLL_LONGEST_RTT = 120 * 1000;
-    // 10 for packets without ack
-    protected static final int NUMBER_SENT_PACKETS_OF_HANG = 10;
     // how long to wait before switching back to default APN
     protected static final int RESTORE_DEFAULT_APN_DELAY = 1 * 60 * 1000;
     // system property that can override the above value
@@ -174,7 +161,6 @@ public abstract class DataConnectionTracker extends Handler {
     protected INetStatService netstat;
     protected long txPkts, rxPkts, sentSinceLastRecv;
     protected int netStatPollPeriod;
-    protected int mNoRecvPollCount = 0;
     protected boolean netStatPollEnabled = false;
 
     /** Manage the behavior of data retry after failure */
@@ -254,6 +240,17 @@ public abstract class DataConnectionTracker extends Handler {
                 Settings.Secure.DATA_ROAMING) > 0;
         } catch (SettingNotFoundException snfe) {
             return false;
+        }
+    }
+
+    public boolean getSocketDataCallEnabled() {
+        try {
+            return Settings.System.getInt(phone.getContext().getContentResolver(),
+                    Settings.System.SOCKET_DATA_CALL_ENABLE) > 0;
+        } catch (SettingNotFoundException snfe) {
+            // Data connection should be enabled by default.
+            // So returning true here.
+            return true;
         }
     }
 
@@ -565,13 +562,16 @@ public abstract class DataConnectionTracker extends Handler {
         if (mMasterDataEnabled != enable) {
             mMasterDataEnabled = enable;
             if (enable) {
+                if (SystemProperties.getBoolean("persist.cust.tel.sdc.feature",false)) {
+                    if (!isEnabled(APN_DEFAULT_ID)) {
+                        setEnabled(APN_DEFAULT_ID, true);
+                    }
+                }
                 mRetryMgr.resetRetryCount();
                 onTrySetupData(Phone.REASON_DATA_ENABLED);
             } else {
                 onCleanUpConnection(true, Phone.REASON_DATA_DISABLED);
-           }
+            }
         }
     }
-
-
 }

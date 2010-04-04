@@ -141,6 +141,11 @@ public:
     // GPS altitude. This will be stored in JPEG EXIF header.
     // Example value: "21.0". Write only.
     static const char KEY_GPS_ALTITUDE[];
+    static const char KEY_GPS_LATITUDE_REF[];
+    static const char KEY_GPS_LONGITUDE_REF[];
+    static const char KEY_GPS_ALTITUDE_REF[];
+    static const char KEY_GPS_STATUS[];
+    static const char KEY_EXIF_DATETIME[];
     // GPS timestamp (UTC in seconds since January 1, 1970). This should be
     // stored in JPEG EXIF header.
     // Example value: "1251192757". Write only.
@@ -193,6 +198,15 @@ public:
     //Lens Shading Values
     static const char KEY_LENSSHADE[] ;
     static const char KEY_SUPPORTED_LENSSHADE_MODES[] ;
+    //Sharpness
+    static const char KEY_SHARPNESS[];
+    static const char KEY_MAX_SHARPNESS[];
+    //Contrast
+    static const char KEY_CONTRAST[];
+    static const char KEY_MAX_CONTRAST[];
+    //Saturation
+    static const char KEY_SATURATION[];
+    static const char KEY_MAX_SATURATION[];
 
         // Values for white balance settings.
     static const char WHITE_BALANCE_AUTO[];
@@ -264,6 +278,7 @@ public:
     static const char PIXEL_FORMAT_YUV422I[]; // YUY2
     static const char PIXEL_FORMAT_RGB565[];
     static const char PIXEL_FORMAT_JPEG[];
+    static const char PIXEL_FORMAT_RAW[];
 
     // Values for focus mode settings.
     // Auto-focus mode.

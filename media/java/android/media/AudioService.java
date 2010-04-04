@@ -46,6 +46,8 @@ import android.view.VolumePanel;
 import android.os.SystemProperties;
 
 import com.android.internal.telephony.ITelephony;
+import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.cdma.TtyIntent;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -146,7 +148,7 @@ public class AudioService extends IAudioService.Stub {
 
    /** @hide Maximum volume index values for audio streams */
     private int[] MAX_STREAM_VOLUME = new int[] {
-        5,  // STREAM_VOICE_CALL
+        6,  // STREAM_VOICE_CALL
         7,  // STREAM_SYSTEM
         7,  // STREAM_RING
         15, // STREAM_MUSIC
@@ -262,8 +264,8 @@ public class AudioService extends IAudioService.Stub {
                 new IntentFilter(Intent.ACTION_HEADSET_PLUG);
         intentFilter.addAction(BluetoothA2dp.ACTION_SINK_STATE_CHANGED);
         intentFilter.addAction(BluetoothHeadset.ACTION_STATE_CHANGED);
+        intentFilter.addAction(TtyIntent.TTY_ENABLED_CHANGE_ACTION);
         context.registerReceiver(mReceiver, intentFilter);
-
     }
 
     private void createAudioSystemThread() {
@@ -1164,6 +1166,10 @@ public class AudioService extends IAudioService.Stub {
 
         private void setSystemVolume(VolumeStreamState streamState) {
 
+            // Make sure for STREAM_VOICE_CALL, RX volume never gets muted
+            if(streamState.mStreamType == AudioSystem.STREAM_VOICE_CALL
+                                      && streamState.mIndex == 0)
+                streamState.adjustIndex(AudioManager.ADJUST_RAISE);
             // Adjust volume
             setStreamVolumeIndex(streamState.mStreamType, streamState.mIndex);
 
@@ -1510,6 +1516,25 @@ public class AudioService extends IAudioService.Stub {
                         mConnectedDevices.put( new Integer(AudioSystem.DEVICE_OUT_WIRED_HEADPHONE), "");
                     }
                 }
+            } else if (action.equals(TtyIntent.TTY_ENABLED_CHANGE_ACTION)) {
+                String tty_mode;
+                switch (Settings.Secure.getInt(mContentResolver,
+                            Settings.Secure.PREFERRED_TTY_MODE,
+                            Phone.TTY_MODE_OFF)) {
+                    case Phone.TTY_MODE_FULL:
+                        tty_mode = "full";
+                        break;
+                    case Phone.TTY_MODE_VCO:
+                        tty_mode = "vco";
+                        break;
+                    case Phone.TTY_MODE_HCO:
+                        tty_mode = "hco";
+                        break;
+                    case Phone.TTY_MODE_OFF:
+                    default:
+                        tty_mode = "off";
+                }
+                AudioSystem.setParameters("tty_mode="+tty_mode);
             }
         }
     }
