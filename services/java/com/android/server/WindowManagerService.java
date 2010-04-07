@@ -5672,6 +5672,10 @@ public class WindowManagerService extends IWindowManager.Stub
                         //dump();
                         if (targetWin != null) {
                             at = targetWin.getAppToken();
+                            if (at == null) {
+                               removeWindowInnerLocked(targetWin.mSession, targetWin);
+                               return null;
+                            }
                         } else if (targetApp != null) {
                             at = targetApp.appToken;
                         }
@@ -8550,7 +8554,8 @@ public class WindowManagerService extends IWindowManager.Stub
             final int N = allAppWindows.size();
             for (int i=0; i<N; i++) {
                 WindowState win = allAppWindows.get(i);
-                if (win == startingWindow || win.mAppFreezing) {
+                if (win == startingWindow || win.mAppFreezing
+                    || win.mAttrs.type == TYPE_APPLICATION_STARTING) {
                     continue;
                 }
                 if (DEBUG_VISIBILITY) {
@@ -11015,6 +11020,7 @@ public class WindowManagerService extends IWindowManager.Stub
                 try {
                     mDimSurface = new Surface(session, 0, -1, 16, 16, PixelFormat.OPAQUE,
                             Surface.FX_SURFACE_DIM);
+                    mDimSurface.setAlpha(0.0f);
                 } catch (Exception e) {
                     Log.e(TAG, "Exception creating Dim surface", e);
                 }

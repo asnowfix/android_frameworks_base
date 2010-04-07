@@ -1457,6 +1457,12 @@ public final class Settings {
         public static final String NOTIFICATION_SCREEN_ON = "notification_screen_on";
 
         /**
+         * Color to pulse the breathing light
+         * @hide
+         */
+        public static final String BREATHING_LIGHT_COLOR = "breathing_light_color";
+
+        /**
          * Whether to wake the screen with the trackball. The value is boolean (1 or 0).
          * @hide
          */
@@ -2022,8 +2028,14 @@ public final class Settings {
         public static final String ADB_ENABLED = "adb_enabled";
 
         /**
+         * Whether to show ADB notifications.
+         * @hide
+         */
+        public static final String ADB_NOTIFY = "adb_notify";
+            
+        /**
          * Weather Compcache is eanbled.
-	 * @hide
+         * @hide
          */
         public static final String COMPCACHE_ENABLED = "compcache_enabled";
         

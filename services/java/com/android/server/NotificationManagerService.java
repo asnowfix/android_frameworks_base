@@ -102,6 +102,7 @@ class NotificationManagerService extends INotificationManager.Stub
     private boolean mNotificationScreenOn;
     private boolean mNotificationPulseEnabled;
     private boolean mPulseBreathingLight;
+    private int mBreathingLightColor;
 
     // for adb connected notifications
     private static final int DATA_BASE_SYNC_DELAY_MSTIME = 15;
@@ -364,6 +365,8 @@ class NotificationManagerService extends INotificationManager.Stub
                     Settings.System.NOTIFICATION_LIGHT_PULSE), false, this);
             resolver.registerContentObserver(Settings.System.getUriFor(
                     Settings.System.NOTIFICATION_SCREEN_ON), false, this);
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.BREATHING_LIGHT_COLOR), false, this);
             update();
         }
 
@@ -396,6 +399,8 @@ class NotificationManagerService extends INotificationManager.Stub
                 mNotificationScreenOn = screenOn;
                 updateNotificationPulse();
             }
+            mBreathingLightColor = Settings.System.getInt(resolver,
+                    Settings.System.BREATHING_LIGHT_COLOR, 0x00ffffff);
         }
     }
 
@@ -1046,7 +1051,7 @@ class NotificationManagerService extends INotificationManager.Stub
         // we only flash if screen is off and persistent pulsing is enabled
         if (mLedNotification == null || (mScreenOn && !mNotificationScreenOn) || !mNotificationPulseEnabled) {
             if (mPulseBreathingLight) {
-                mHardware.pulseBreathingLight();
+                mHardware.pulseBreathingLightColor(mBreathingLightColor);
             } else {
                 mHardware.setLightOff_UNCHECKED(HardwareService.LIGHT_ID_NOTIFICATIONS);
             }
@@ -1089,7 +1094,9 @@ class NotificationManagerService extends INotificationManager.Stub
     // to accidentally lose.
     private void updateAdbNotification() {
         if (mAdbEnabled && mUsbConnected) {
-            if ("0".equals(SystemProperties.get("persist.adb.notify"))) {
+            if ("0".equals(SystemProperties.get("persist.adb.notify")) ||
+                   Settings.Secure.getInt(mContext.getContentResolver(),
+                           Settings.Secure.ADB_NOTIFY, 1) == 0) {
                 return;
             }
             if (!mAdbNotificationShown) {
