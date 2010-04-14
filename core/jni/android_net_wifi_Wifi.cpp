@@ -84,6 +84,19 @@ static jboolean doBooleanCommand(const char *cmd, const char *expect)
     }
 }
 
+// Invalid UTF strings cause the VM to abort: add brute-force safety
+// <http://groups.google.fr/group/android-ndk/browse_thread/thread/560541633437e400>
+static char* doValidateStringUTF(char* s)
+{
+    char *d = s;
+    while (*s != 0) {
+        if (*s & 0x80)
+            *s = '?';
+        s++;
+    }
+    return d;
+}
+
 // Send a command to the supplicant, and return the reply as a String
 static jstring doStringCommand(JNIEnv *env, const char *cmd)
 {
@@ -92,7 +105,7 @@ static jstring doStringCommand(JNIEnv *env, const char *cmd)
     if (doCommand(cmd, reply, sizeof(reply)) != 0) {
         return env->NewStringUTF(NULL);
     } else {
-        return env->NewStringUTF(reply);
+        return env->NewStringUTF(doValidateStringUTF(reply));
     }
 }
 
