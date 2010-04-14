@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2008 The Android Open Source Project
+ * Copyright (C) 2010, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -125,7 +126,25 @@ public:
     virtual status_t    startPreview() = 0;
 
     /**
+     * Query the recording buffer information from HAL.
+     * This is needed because the opencore expects the buffer
+     * information before starting the recording.
+     * Default implementation from CameraHardwareStub
+     * (for msm7k hardware that does not implement this).
+     */
+    virtual status_t    getBufferInfo(sp<IMemory>& Frame, size_t *alignedSize) {
+        /* No Support for this API in STUB Camera. Just return NULL */
+        Frame = NULL;
+        if( alignedSize != NULL)
+            *alignedSize = 0;
+
+        return UNKNOWN_ERROR;
+    }
+
+    /**
      * Only used if overlays are used for camera preview.
+     * Default implementation from CameraHardwareStub.
+     * (for msm7k hardware that does not implement this).
      */
     virtual bool         useOverlay() { return false; };
     virtual status_t     setOverlay(const sp<Overlay> &overlay) { return NO_ERROR; }

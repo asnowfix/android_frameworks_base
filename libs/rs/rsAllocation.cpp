@@ -22,6 +22,43 @@
 using namespace android;
 using namespace android::renderscript;
 
+static long *earlierAllocations;
+static unsigned int currentNumAllocations;
+
+Allocation::Allocation(Context *rsc, const Type *type, int index) : ObjectBase(rsc)
+{
+    mAllocFile = __FILE__;
+    mAllocLine = __LINE__;
+    mPtr = NULL;
+
+    mCpuWrite = false;
+    mCpuRead = false;
+    mGpuWrite = false;
+    mGpuRead = false;
+
+    mReadWriteRatio = 0;
+    mUpdateSize = 0;
+
+    mIsTexture = false;
+    mTextureID = 0;
+
+    mIsVertexBuffer = false;
+    mBufferID = 0;
+
+    mType.set(type);
+    rsAssert(type);
+    if (!earlierAllocations[index]) {
+        mPtr = malloc(mType->getSizeBytes());
+        earlierAllocations[index] = (long) mPtr;
+    }
+    else
+        mPtr = (void*) earlierAllocations[index];
+    if (!mPtr) {
+        LOGE("Allocation::Allocation, alloc failure");
+    }
+    mUseEarlierAllocation = true;
+}
+
 Allocation::Allocation(Context *rsc, const Type *type) : ObjectBase(rsc)
 {
     mAllocFile = __FILE__;
@@ -32,6 +69,7 @@ Allocation::Allocation(Context *rsc, const Type *type) : ObjectBase(rsc)
     mCpuRead = false;
     mGpuWrite = false;
     mGpuRead = false;
+    mUseEarlierAllocation = false;
 
     mReadWriteRatio = 0;
     mUpdateSize = 0;
@@ -52,7 +90,8 @@ Allocation::Allocation(Context *rsc, const Type *type) : ObjectBase(rsc)
 
 Allocation::~Allocation()
 {
-    free(mPtr);
+    if (!mUseEarlierAllocation)
+        free(mPtr);
     mPtr = NULL;
 
     if (mBufferID) {
@@ -297,6 +336,15 @@ void Allocation::sendDirty() const
 namespace android {
 namespace renderscript {
 
+RsAllocation rsi_AllocationCreateTyped(Context *rsc, RsType vtype, int index)
+{
+    const Type * type = static_cast<const Type *>(vtype);
+
+    Allocation * alloc = new Allocation(rsc, type, index);
+    alloc->incUserRef();
+    return alloc;
+}
+
 RsAllocation rsi_AllocationCreateTyped(Context *rsc, RsType vtype)
 {
     const Type * type = static_cast<const Type *>(vtype);
@@ -479,6 +527,54 @@ static ElementConverter_t pickConverter(const Element *dst, const Element *src)
     return 0;
 }
 
+RsAllocation rsi_AllocationCreateAndUploadFromBitmap(Context *rsc, uint32_t w, uint32_t h, RsElement _dst, RsElement _src,  bool genMips, const void *data, uint32_t basemipLevel)
+{
+    const Element *src = static_cast<const Element *>(_src);
+    const Element *dst = static_cast<const Element *>(_dst);
+    rsAssert(!(w & (w-1)));
+    rsAssert(!(h & (h-1)));
+
+    //LOGE("rsi_AllocationCreateFromBitmap %i %i %i %i %i", w, h, dstFmt, srcFmt, genMips);
+    rsi_TypeBegin(rsc, _dst);
+    rsi_TypeAdd(rsc, RS_DIMENSION_X, w);
+    rsi_TypeAdd(rsc, RS_DIMENSION_Y, h);
+    if (genMips) {
+        rsi_TypeAdd(rsc, RS_DIMENSION_LOD, 1);
+    }
+    RsType type = rsi_TypeCreate(rsc);
+    RsAllocation vTexAlloc = rsi_AllocationCreateTyped(rsc, type);
+    Allocation *texAlloc = static_cast<Allocation *>(vTexAlloc);
+    if (texAlloc == NULL) {
+        LOGE("Memory allocation failure");
+        return NULL;
+    }
+
+	void** temp_buffer = texAlloc->getPtrAddr();
+	if(*temp_buffer != NULL){
+		free(*temp_buffer);
+		*temp_buffer = NULL;
+		}
+	*temp_buffer = const_cast<void*>(data);
+
+    //ElementConverter_t cvt = pickConverter(dst, src);
+    //cvt(texAlloc->getPtr(), data, w * h);
+
+    if (genMips) {
+        Adapter2D adapt(rsc, texAlloc);
+        Adapter2D adapt2(rsc, texAlloc);
+        for(uint32_t lod=0; lod < (texAlloc->getType()->getLODCount() -1); lod++) {
+            adapt.setLOD(lod);
+            adapt2.setLOD(lod + 1);
+            mip(adapt2, adapt);
+        }
+    }
+
+	texAlloc->deferedUploadToTexture(rsc,basemipLevel);
+	*temp_buffer = NULL;
+
+
+    return texAlloc;
+}
 
 RsAllocation rsi_AllocationCreateFromBitmap(Context *rsc, uint32_t w, uint32_t h, RsElement _dst, RsElement _src,  bool genMips, const void *data)
 {
@@ -496,7 +592,6 @@ RsAllocation rsi_AllocationCreateFromBitmap(Context *rsc, uint32_t w, uint32_t h
         rsi_TypeAdd(rsc, RS_DIMENSION_LOD, 1);
     }
     RsType type = rsi_TypeCreate(rsc);
-
     RsAllocation vTexAlloc = rsi_AllocationCreateTyped(rsc, type);
     Allocation *texAlloc = static_cast<Allocation *>(vTexAlloc);
     if (texAlloc == NULL) {
@@ -518,6 +613,91 @@ RsAllocation rsi_AllocationCreateFromBitmap(Context *rsc, uint32_t w, uint32_t h
     }
 
     return texAlloc;
+}
+
+RsAllocation rsi_AllocationCreateFromBitmap1(Context *rsc, uint32_t w, uint32_t h, RsElement _dst, RsElement _src,  bool genMips, const void *data, uint32_t index)
+{
+    const Element *src = static_cast<const Element *>(_src);
+    const Element *dst = static_cast<const Element *>(_dst);
+    rsAssert(!(w & (w-1)));
+    rsAssert(!(h & (h-1)));
+
+    bool useCt = !(earlierAllocations[index]);
+    //LOGE("rsi_AllocationCreateFromBitmap %i %i %i %i %i", w, h, dstFmt, srcFmt, genMips);
+    rsi_TypeBegin(rsc, _dst);
+    rsi_TypeAdd(rsc, RS_DIMENSION_X, w);
+    rsi_TypeAdd(rsc, RS_DIMENSION_Y, h);
+    if (genMips) {
+        rsi_TypeAdd(rsc, RS_DIMENSION_LOD, 1);
+    }
+    RsType type = rsi_TypeCreate(rsc);
+
+    RsAllocation vTexAlloc = rsi_AllocationCreateTyped(rsc, type, index);
+    Allocation *texAlloc = static_cast<Allocation *>(vTexAlloc);
+    if (texAlloc == NULL) {
+        LOGE("Memory allocation failure");
+        return NULL;
+    }
+
+    if (useCt) {
+        ElementConverter_t cvt = pickConverter(dst, src);
+        cvt(texAlloc->getPtr(), data, w * h);
+    }
+
+    if (genMips && useCt) {
+        Adapter2D adapt(rsc, texAlloc);
+        Adapter2D adapt2(rsc, texAlloc);
+        for(uint32_t lod=0; lod < (texAlloc->getType()->getLODCount() -1); lod++) {
+            adapt.setLOD(lod);
+            adapt2.setLOD(lod + 1);
+            mip(adapt2, adapt);
+        }
+    }
+
+    return texAlloc;
+}
+
+void rsi_AllocationAddToAllocationList(Context *rsc, uint32_t index)
+{
+    unsigned int temp = currentNumAllocations;
+    currentNumAllocations++;
+    earlierAllocations = (long*) realloc(earlierAllocations, (sizeof(long) * currentNumAllocations));
+    memmove(earlierAllocations + index + 1, earlierAllocations + index, (temp - index) * sizeof(long)); 
+    earlierAllocations[index] = 0;
+}
+
+void rsi_AllocationRemoveFromAllocationList(Context *rsc, uint32_t index)
+{
+    if (index >= currentNumAllocations || !earlierAllocations || !earlierAllocations[index])
+        return;
+
+    if (earlierAllocations[index])
+        free((void *) earlierAllocations[index]);
+
+    memmove(earlierAllocations + index, earlierAllocations + index + 1, (currentNumAllocations - index - 1) * sizeof(long)); 
+    currentNumAllocations--;
+    earlierAllocations = (long*) realloc(earlierAllocations, (sizeof(long) * currentNumAllocations));
+}
+
+void rsi_AllocationCreateAllocationList(Context *rsc,  uint32_t count)
+{
+    if (!earlierAllocations && count > 0) {
+        earlierAllocations = (long*) malloc(sizeof(long) * count);
+	currentNumAllocations = count;
+	for (int i = 0; i < currentNumAllocations; i++)
+	    earlierAllocations[i] = 0;
+    }
+    else if (count > 0) {
+	for (int i = 0; i < currentNumAllocations; i++) {
+	    if (earlierAllocations[i])
+	        free((void*) earlierAllocations[i]);
+	    earlierAllocations[i] = 0;
+        }
+        earlierAllocations = (long*) realloc(earlierAllocations, sizeof(long) * count);
+	currentNumAllocations = count;
+	for (int i = 0; i < currentNumAllocations; i++)
+	    earlierAllocations[i] = 0;
+    }
 }
 
 RsAllocation rsi_AllocationCreateFromBitmapBoxed(Context *rsc, uint32_t w, uint32_t h, RsElement _dst, RsElement _src, bool genMips, const void *data)

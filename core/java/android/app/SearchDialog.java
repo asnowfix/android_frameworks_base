@@ -505,7 +505,7 @@ public class SearchDialog extends Dialog implements OnItemClickListener, OnItemS
      * Called after resources have changed, e.g. after screen rotation or locale change.
      */
     public void onConfigurationChanged() {
-        if (isShowing()) {
+        if (isShowing() && (mSearchable != null)) {
             // Redraw (resources may have changed)
             updateSearchButton();
             updateSearchAppIcon();
@@ -1196,6 +1196,9 @@ public class SearchDialog extends Dialog implements OnItemClickListener, OnItemS
      * @return true if a successful launch, false if could not (e.g. bad position).
      */
     protected boolean launchSuggestion(int position, int actionKey, String actionMsg) {
+        if (mSuggestionsAdapter == null) {
+            return false;
+        }
         Cursor c = mSuggestionsAdapter.getCursor();
         if ((c != null) && c.moveToPosition(position)) {
 

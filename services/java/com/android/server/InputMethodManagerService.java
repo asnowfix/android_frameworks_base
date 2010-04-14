@@ -1186,6 +1186,7 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
             if (mCurClient == null || client == null
                     || mCurClient.client.asBinder() != client.asBinder()) {
                 Log.w(TAG, "Ignoring showInputMethodDialogFromClient of: " + client);
+                return;
             }
 
             mHandler.sendEmptyMessage(MSG_SHOW_IM_PICKER);
@@ -1498,9 +1499,12 @@ public class InputMethodManagerService extends IInputMethodManager.Stub
                 new AlertDialog.OnClickListener() {
                     public void onClick(DialogInterface dialog, int which) {
                         synchronized (mMethodMap) {
-                            InputMethodInfo im = mIms[which];
-                            hideInputMethodMenu();
-                            setInputMethodLocked(im.getId());
+                            // Check if the mIms is null
+                            if (mIms != null) {
+                                InputMethodInfo im = mIms[which];
+                                hideInputMethodMenu();
+                                setInputMethodLocked(im.getId());
+                            }
                         }
                     }
                 });

@@ -2,6 +2,7 @@
 **
 ** Copyright (C) 2008, The Android Open Source Project
 ** Copyright (C) 2008 HTC Inc.
+** Copyright (C) 2010, Code Aurora Forum. All rights reserved.
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
 ** you may not use this file except in compliance with the License.
@@ -67,6 +68,17 @@ extern "C" {
 #if DEBUG_DUMP_PREVIEW_FRAME_TO_FILE
 static int debug_frame_cnt;
 #endif
+
+struct camera_size_type {
+    int width;
+    int height;
+};
+
+static const camera_size_type preview_sizes[] = {
+     { 1280, 720 }, // 720P
+     { 768,  432 },
+};
+
 
 static int getCallingPid() {
     return IPCThreadState::self()->getCallingPid();
@@ -236,9 +248,6 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
                              CAMERA_MSG_FOCUS);
 
     mMediaPlayerClick = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
-    // Commenting Beep temporarily for camcorder to work
-    property_get("ro.product.device",value," ");
-    if(strcmp(value,"qsd8250_surf") || strcmp(value,"qsd8250_surf"))
     mMediaPlayerBeep = newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
 
     mOverlayW = 0;
@@ -426,8 +435,8 @@ void CameraService::Client::disconnect()
     if (mUseOverlay)
     {
         /* Release previous overlay handle */
-	if(mSurface != NULL)
-            mSurface->releaseOverlay();
+        if( mOverlay != NULL)
+            mOverlay->destroy();
         mOverlayRef = 0;
     }
     mHardware.clear();
@@ -567,15 +576,24 @@ status_t CameraService::Client::setOverlay()
     CameraParameters params(mHardware->getParameters());
     params.getPreviewSize(&w, &h);
 
+    //for 720p recording , preview can be 800X448
+    char mDeviceName[PROPERTY_VALUE_MAX];
+    property_get("ro.product.device",mDeviceName," ");
+    if(!strncmp(mDeviceName, "msm7630",7) || !strncmp(mDeviceName, "qsd8250",7)){
+        if(w == preview_sizes[0].width && h==preview_sizes[0].height){
+            LOGD("Changing overlay dimensions to 768X432 for 720p recording.");
+            w = preview_sizes[1].width;
+            h = preview_sizes[1].height;
+        }
+    }
     if ( w != mOverlayW || h != mOverlayH )
     {
         // Force the destruction of any previous overlay
         sp<Overlay> dummy;
         mHardware->setOverlay( dummy );
         mOverlayRef = 0;
-        /* Release previous overlay handle */
-        if(mSurface != NULL)
-	    mSurface->releaseOverlay();
+        if(mOverlay != NULL)
+            mOverlay->destroy();
     }
 
     status_t ret = NO_ERROR;
@@ -599,7 +617,8 @@ status_t CameraService::Client::setOverlay()
                 LOGE("Overlay Creation Failed!");
                 return -EINVAL;
             }
-            ret = mHardware->setOverlay(new Overlay(mOverlayRef));
+            mOverlay = new Overlay(mOverlayRef);
+            ret = mHardware->setOverlay(mOverlay);
         }
     } else {
         ret = mHardware->setOverlay(NULL);
@@ -620,6 +639,17 @@ status_t CameraService::Client::registerPreviewBuffers()
     CameraParameters params(mHardware->getParameters());
     params.getPreviewSize(&w, &h);
 
+    //for 720p recording , preview can be 800X448
+    char mDeviceName[PROPERTY_VALUE_MAX];
+
+    property_get("ro.product.device",mDeviceName," ");
+    if(!strncmp(mDeviceName,"msm7630", 7) || !strncmp(mDeviceName,"qsd8250", 7)){
+        if(w ==  preview_sizes[0].width && h== preview_sizes[0].height){
+            LOGD("registerpreviewbufs :changing dimensions to 768X432 for 720p recording.");
+            w = preview_sizes[1].width;
+            h = preview_sizes[1].height;
+        }
+    }
     uint32_t transform = 0;
     if (params.getOrientation() ==
         CameraParameters::CAMERA_ORIENTATION_PORTRAIT) {
@@ -673,6 +703,17 @@ status_t CameraService::Client::startPreviewMode()
         }
     }
     return ret;
+}
+
+status_t CameraService::Client::getBufferInfo(sp<IMemory>& Frame, size_t *alignedSize)
+{
+    LOGD(" getBufferInfo : E");
+    if (mHardware == NULL) {
+        LOGE("mHardware is NULL, returning.");
+        Frame = NULL;
+	return INVALID_OPERATION;
+    }
+    return mHardware->getBufferInfo(Frame, alignedSize);
 }
 
 status_t CameraService::Client::startPreview()
@@ -905,32 +946,35 @@ status_t CameraService::Client::takePicture()
 
 // snapshot taken
 void CameraService::Client::handleShutter(
-    image_rect_type *size // The width and height of yuv picture for
+    image_rect_type *size, // The width and height of yuv picture for
                           // registerBuffer. If this is NULL, use the picture
                           // size from parameters.
+    bool playShutterSoundOnly
 )
 {
-    // Play shutter sound.
-    if (mMediaPlayerClick.get() != NULL) {
-        // do not play shutter sound if stream volume is 0
-        // (typically because ringer mode is silent).
-        int index;
-        AudioSystem::getStreamVolumeIndex(AudioSystem::ENFORCED_AUDIBLE, &index);
-        if (index != 0) {
-            mMediaPlayerClick->seekTo(0);
-            mMediaPlayerClick->start();
-        }
+    if(playShutterSoundOnly) {
+	// Play shutter sound.
+	if (mMediaPlayerClick.get() != NULL) {
+	    // do not play shutter sound if stream volume is 0
+	    // (typically because ringer mode is silent).
+	    int index;
+	    AudioSystem::getStreamVolumeIndex(AudioSystem::ENFORCED_AUDIBLE, &index);
+	    if (index != 0) {
+		mMediaPlayerClick->seekTo(0);
+		mMediaPlayerClick->start();
+	    }
+	}
+	sp<ICameraClient> c = mCameraClient;
+	if (c != NULL) {
+	    c->notifyCallback(CAMERA_MSG_SHUTTER, 0, 0);
+	}
+	return;
     }
-
     // Screen goes black after the buffer is unregistered.
     if (mSurface != 0 && !mUseOverlay) {
         mSurface->unregisterBuffers();
     }
 
-    sp<ICameraClient> c = mCameraClient;
-    if (c != NULL) {
-        c->notifyCallback(CAMERA_MSG_SHUTTER, 0, 0);
-    }
     mHardware->disableMsgType(CAMERA_MSG_SHUTTER);
 
     // It takes some time before yuvPicture callback to be called.
@@ -1107,7 +1151,7 @@ void CameraService::Client::notifyCallback(int32_t msgType, int32_t ext1, int32_
     switch (msgType) {
         case CAMERA_MSG_SHUTTER:
             // ext1 is the dimension of the yuv picture.
-            client->handleShutter((image_rect_type *)ext1);
+            client->handleShutter((image_rect_type *)ext1, (bool)ext2);
             break;
         default:
             sp<ICameraClient> c = client->mCameraClient;

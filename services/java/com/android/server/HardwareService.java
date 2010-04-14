@@ -162,8 +162,17 @@ public class HardwareService extends IHardwareService.Stub {
             return;
         }
         Vibration vib = new Vibration(token, milliseconds);
+        try {
+            token.linkToDeath(vib, 0);
+        } catch (RemoteException e) {
+            return;
+        }
         synchronized (mVibrations) {
             removeVibrationLocked(token);
+            if ((mCurrentVibration != null) && (mThread == null)) {
+                mCurrentVibration.mToken.unlinkToDeath(mCurrentVibration, 0);
+                mCurrentVibration = null;
+            }
             doCancelVibrateLocked();
             mCurrentVibration = vib;
             startVibrationLocked(vib);
@@ -213,6 +222,10 @@ public class HardwareService extends IHardwareService.Stub {
 
             synchronized (mVibrations) {
                 removeVibrationLocked(token);
+                if ((mCurrentVibration != null) && (mThread == null)) {
+                    mCurrentVibration.mToken.unlinkToDeath(mCurrentVibration, 0);
+                    mCurrentVibration = null;
+                }
                 doCancelVibrateLocked();
                 if (repeat >= 0) {
                     mVibrations.addFirst(vib);
@@ -244,6 +257,10 @@ public class HardwareService extends IHardwareService.Stub {
                     doCancelVibrateLocked();
                     startNextVibrationLocked();
                 }
+               if ((mCurrentVibration != null) && (mThread == null)) {
+                   mCurrentVibration.mToken.unlinkToDeath(mCurrentVibration, 0);
+                   mCurrentVibration = null;
+               }
             }
         }
         finally {
