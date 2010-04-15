@@ -2985,15 +2985,17 @@ public final class RIL extends BaseCommands implements CommandsInterface {
         String strings[] = (String [])responseStrings(p);
         ArrayList<NetworkInfo> ret;
 
-        if (strings.length % 4 != 0) {
+        if (strings.length % 5 != 0) {
+            for (int i = 0; i < strings.length; i++)
+                Log.e(LOG_TAG, "RIL_REQUEST_QUERY_AVAILABLE_NETWORKS: response["+i+"]='"+strings[i]+"'");
             throw new RuntimeException(
                 "RIL_REQUEST_QUERY_AVAILABLE_NETWORKS: invalid response. Got "
-                + strings.length + " strings, expected multible of 4");
+                + strings.length + " strings, expected multible of 5");
         }
 
-        ret = new ArrayList<NetworkInfo>(strings.length / 4);
+        ret = new ArrayList<NetworkInfo>(strings.length / 5);
 
-        for (int i = 0 ; i < strings.length ; i += 4) {
+        for (int i = 0 ; i < strings.length ; i += 5) {
             ret.add (
                 new NetworkInfo(
                     strings[i+0],
