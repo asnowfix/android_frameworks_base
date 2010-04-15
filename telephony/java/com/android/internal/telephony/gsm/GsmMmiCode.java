@@ -57,6 +57,11 @@ public final class GsmMmiCode  extends Handler implements MmiCode {
     //Called line presentation
     static final String SC_CLIP    = "30";
     static final String SC_CLIR    = "31";
+    static final String SC_COLP    = "76";
+    static final String SC_COLR    = "77";
+
+    //Calling name presentation
+    static final String SC_CNAP    = "300";
 
     // Call Forwarding
     static final String SC_CFU     = "21";
@@ -347,6 +352,14 @@ public final class GsmMmiCode  extends Handler implements MmiCode {
                 || sc.equals(SC_BA_MT));
     }
 
+    static boolean
+    isServiceCodeUnsupported(String sc) {
+	return sc != null &&
+		(sc.equals(SC_COLP)
+		|| sc.equals(SC_COLR)
+		|| sc.equals(SC_CNAP));
+    }
+
     static String
     scToBarringFacility(String sc) {
         if (sc == null) {
@@ -624,6 +637,15 @@ public final class GsmMmiCode  extends Handler implements MmiCode {
                         throw new RuntimeException ("invalid action");
                     }
 
+		    // Strip seperators from the number including pause char
+		    // (ignores post-dial sequence) and extract only network
+		    // portion of the number.
+		    if (sia != null) {
+			Log.d(LOG_TAG, "Extract Network Portion[" + sia + "]..");
+			dialingNumber = PhoneNumberUtils.extractNetworkPortion(sia);
+			Log.d(LOG_TAG, "Forward-to-Number: " + dialingNumber);
+		    }
+
                     int isSettingUnconditionalVoice =
                         (((reason == CommandsInterface.CF_REASON_UNCONDITIONAL) ||
                                 (reason == CommandsInterface.CF_REASON_ALL)) &&
@@ -739,7 +761,14 @@ public final class GsmMmiCode  extends Handler implements MmiCode {
                     throw new RuntimeException ("Invalid or Unsupported MMI Code");
                 }
             } else if (poundString != null) {
-                sendUssd(poundString);
+		if (isServiceCodeUnsupported(sc)) {
+		    Log.d(LOG_TAG,"Unsupported MMI code: " + sc);
+		    state = State.FAILED;
+		    message = context.getText(com.android.internal.R.string.unsupportedMmiCode);
+		    phone.onMMIDone(this);
+		} else {
+		    sendUssd(poundString);
+		}
             } else {
                 throw new RuntimeException ("Invalid or Unsupported MMI Code");
             }
