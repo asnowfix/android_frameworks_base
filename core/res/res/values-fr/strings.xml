@@ -122,6 +122,9 @@
     <string name="turn_on_radio" msgid="3912793092339962371">"Activer le mode sans fil"</string>
     <string name="turn_off_radio" msgid="8198784949987062346">"Désactiver le mode sans fil"</string>
     <string name="screen_lock" msgid="799094655496098153">"Verrouillage de l\'écran"</string>
+    <string name="reboot_system">Redémarrage</string>
+    <string name="reboot_confirm">Votre.téléphone va redémarrer.</string>
+    <string name="reboot_progress">Redémarrage en cours...</string>
     <string name="power_off" msgid="4266614107412865048">"Éteindre"</string>
     <string name="shutdown_progress" msgid="2281079257329981203">"Arrêt en cours..."</string>
     <string name="shutdown_confirm" msgid="649792175242821353">"Votre téléphone va s\'éteindre."</string>
@@ -129,6 +132,7 @@
     <string name="global_actions" msgid="2406416831541615258">"Options du téléphone"</string>
     <string name="global_action_lock" msgid="2844945191792119712">"Verrouillage de l\'écran"</string>
     <string name="global_action_power_off" msgid="4471879440839879722">"Éteindre"</string>
+    <string name="global_action_reboot">Redémarrage</string>
     <string name="global_action_toggle_silent_mode" msgid="8219525344246810925">"Mode silencieux"</string>
     <string name="global_action_silent_mode_on_status" msgid="3289841937003758806">"Le son est désactivé."</string>
     <string name="global_action_silent_mode_off_status" msgid="1506046579177066419">"Le son est activé."</string>
