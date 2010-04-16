@@ -77,7 +77,7 @@ class ServerThread extends Thread {
            SystemProperties.set("persist.service.compcache", enableCompcache ? "1" : "0");
         }
     }
-    
+
     @Override
     public void run() {
         EventLog.writeEvent(LOG_BOOT_PROGRESS_SYSTEM_RUN,
@@ -249,7 +249,6 @@ class ServerThread extends Thread {
                 Log.i(TAG, "Connectivity Service");
                 connectivity = ConnectivityService.getInstance(context);
                 ServiceManager.addService(Context.CONNECTIVITY_SERVICE, connectivity);
-                connectivity.startCne();
             } catch (Throwable e) {
                 Log.e(TAG, "Failure starting Connectivity Service", e);
             }
@@ -381,7 +380,7 @@ class ServerThread extends Thread {
 
 	mContentResolver.registerContentObserver(Settings.Secure.getUriFor(Settings.Secure.COMPCACHE_ENABLED),
         		false, new CompcacheSettingsObserver());
- 
+
         // Before things start rolling, be sure we have decided whether
         // we are in safe mode.
         final boolean safeMode = wm.detectSafeMode();
@@ -391,7 +390,7 @@ class ServerThread extends Thread {
             } catch (RemoteException e) {
             }
         }
-       
+
         // It is now time to start up the app processes...
 
         if (notification != null) {
@@ -415,7 +414,7 @@ class ServerThread extends Thread {
         final AppWidgetService appWidgetF = appWidget;
         final WallpaperManagerService wallpaperF = wallpaper;
         final InputMethodManagerService immF = imm;
-        
+
         // We now tell the activity manager it is okay to run third party
         // code.  It will call back into us once it has gotten to the state
         // where third party code can really run (but before it has actually
@@ -425,7 +424,7 @@ class ServerThread extends Thread {
                 .systemReady(new Runnable() {
             public void run() {
                 Log.i(TAG, "Making services ready");
-                
+
                 if (batteryF != null) batteryF.systemReady();
                 if (connectivityF != null) connectivityF.systemReady();
                 if (dockF != null) dockF.systemReady();
@@ -433,13 +432,13 @@ class ServerThread extends Thread {
 
                 // It is now okay to let the various system services start their
                 // third party code...
-                
+
                 if (appWidgetF != null) appWidgetF.systemReady(safeMode);
                 if (wallpaperF != null) wallpaperF.systemReady();
                 if (immF != null) immF.systemReady();
             }
         });
-        
+
         Looper.loop();
         Log.d(TAG, "System ServerThread is exiting!");
     }

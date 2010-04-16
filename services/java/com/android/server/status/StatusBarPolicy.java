@@ -568,7 +568,7 @@ public class StatusBarPolicy {
         int level = intent.getIntExtra("level", -1);
 
         //show battery percentage if not plugged in and status is enabled
-        if (plugged || level >= 100 || 
+        if (plugged || level >= 100 ||
 	        Settings.System.getInt(mContext.getContentResolver(),
                 Settings.System.BATTERY_PERCENTAGE_STATUS_ICON, 1) == 0) {
             mBatteryData.number = -1;
@@ -833,9 +833,6 @@ public class StatusBarPolicy {
         if (IccCard.INTENT_VALUE_ICC_ABSENT.equals(stateExtra)) {
             mSimState = IccCard.State.ABSENT;
         }
-        else if (IccCard.INTENT_VALUE_ICC_CARD_IO_ERROR.equals(stateExtra)) {
-            mSimState = IccCard.State.CARD_IO_ERROR;
-        }
         else if (IccCard.INTENT_VALUE_ICC_READY.equals(stateExtra)) {
             mSimState = IccCard.State.READY;
         }
@@ -847,26 +844,6 @@ public class StatusBarPolicy {
                 mSimState = IccCard.State.PUK_REQUIRED;
             } else if(IccCard.INTENT_VALUE_LOCKED_NETWORK.equals(lockedReason)) {
                 mSimState = IccCard.State.NETWORK_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_NETWORK_SUBSET.equals(lockedReason)) {
-                mSimState = IccCard.State.SIM_NETWORK_SUBSET_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_CORPORATE.equals(lockedReason)) {
-                mSimState = IccCard.State.SIM_CORPORATE_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_SERVICE_PROVIDER.equals(lockedReason)) {
-                mSimState = IccCard.State.SIM_SERVICE_PROVIDER_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_SIM.equals(lockedReason)) {
-                mSimState = IccCard.State.SIM_SIM_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_NETWORK1.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_NETWORK1_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_NETWORK2.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_NETWORK2_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_HRPD.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_HRPD_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_CORPORATE.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_CORPORATE_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_SERVICE_PROVIDER.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_SERVICE_PROVIDER_LOCKED;
-            } else if(IccCard.INTENT_VALUE_LOCKED_RUIM_RUIM.equals(lockedReason)) {
-                mSimState = IccCard.State.RUIM_RUIM_LOCKED;
             } else {
                 mSimState = IccCard.State.UNKNOWN;
             }

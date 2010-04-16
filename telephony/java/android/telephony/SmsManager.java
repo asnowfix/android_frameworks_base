@@ -398,6 +398,4 @@ public final class SmsManager {
     static public final int RESULT_ERROR_NO_SERVICE         = 4;
     /** Failed because we reached the sending queue limit.  {@hide} */
     static public final int RESULT_ERROR_LIMIT_EXCEEDED     = 5;
-    /** Failed because FDN is enabled. {@hide} */
-    static public final int RESULT_ERROR_FDN_FAILURE        = 6;
 }

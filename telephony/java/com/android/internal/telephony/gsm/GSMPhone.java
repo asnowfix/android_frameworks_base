@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2006 The Android Open Source Project
- * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,8 +35,6 @@ import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.text.TextUtils;
 import android.util.Log;
-import android.provider.Settings;
-import android.os.SystemClock;
 
 import static com.android.internal.telephony.CommandsInterface.CF_ACTION_DISABLE;
 import static com.android.internal.telephony.CommandsInterface.CF_ACTION_ENABLE;
@@ -731,7 +728,9 @@ public class GSMPhone extends PhoneBase {
             return null;
         }
 
-        GsmMmiCode mmi = GsmMmiCode.newFromDialString(newDialString, this);
+        // Only look at the Network portion for mmi
+        String networkPortion = PhoneNumberUtils.extractNetworkPortion(newDialString);
+        GsmMmiCode mmi = GsmMmiCode.newFromDialString(networkPortion, this);
         if (LOCAL_DEBUG) Log.d(LOG_TAG,
                                "dialing w/ mmi '" + mmi + "'...");
 
@@ -964,21 +963,6 @@ public class GSMPhone extends PhoneBase {
         }
     }
 
-    /**
-     * Set the TTY mode of the GSMPhone
-     */
-    public void setTTYMode(int ttyMode, Message onComplete) {
-        this.mCM.setTTYMode(ttyMode, onComplete);
-    }
-
-    /**
-     * Queries the TTY mode of the GSMPhone
-     */
-    public void queryTTYMode(Message onComplete) {
-        this.mCM.queryTTYMode(onComplete);
-    }
-
-
     public void getOutgoingCallerIdDisplay(Message onComplete) {
         mCM.getCLIR(onComplete);
     }
@@ -990,9 +974,7 @@ public class GSMPhone extends PhoneBase {
     }
 
     public void getCallWaiting(Message onComplete) {
-        //As per 3GPP TS 24.083, section 1.6 UE doesn't need to send service
-        //class parameter in call waiting interrogation  to network
-        mCM.queryCallWaiting(CommandsInterface.SERVICE_CLASS_NONE, onComplete);
+        mCM.queryCallWaiting(CommandsInterface.SERVICE_CLASS_VOICE, onComplete);
     }
 
     public void setCallWaiting(boolean enable, Message onComplete) {
@@ -1010,9 +992,7 @@ public class GSMPhone extends PhoneBase {
 
     public void
     getAvailableNetworks(Message response) {
-        Message msg;
-        msg = obtainMessage(EVENT_GET_NETWORKS_DONE,response);
-        mCM.getAvailableNetworks(msg);
+        mCM.getAvailableNetworks(response);
     }
 
     /**
@@ -1247,11 +1227,6 @@ public class GSMPhone extends PhoneBase {
         AsyncResult ar;
         Message onComplete;
 
-        if (!mIsTheCurrentActivePhone) {
-            Log.e(LOG_TAG, "Received message " + msg +
-                    "[" + msg.what + "] while being destroyed. Ignoring.");
-            return;
-        }
         switch (msg.what) {
             case EVENT_RADIO_AVAILABLE: {
                 mCM.getBasebandVersion(
@@ -1402,28 +1377,6 @@ public class GSMPhone extends PhoneBase {
                 }
                 break;
 
-            case EVENT_GET_NETWORKS_DONE:
-                ArrayList<NetworkInfo> eonsNetworkNames = null;
-
-                ar = (AsyncResult)msg.obj;
-                if (ar.exception == null) {
-                    eonsNetworkNames =
-                       mSIMRecords.getEonsAvailableNetworks((ArrayList<NetworkInfo>)ar.result);
-                }
-                if (eonsNetworkNames != null) {
-                    Log.i(LOG_TAG, "In EVENT_GET_NETWORKS_DONE, populated EONS names");
-                } else {
-                    eonsNetworkNames = (ArrayList<NetworkInfo>)ar.result;
-                }
-                onComplete = (Message) ar.userObj;
-                if (onComplete != null) {
-                    AsyncResult.forMessage(onComplete, eonsNetworkNames, ar.exception);
-                    onComplete.sendToTarget();
-                } else {
-                    Log.e(LOG_TAG, "In EVENT_GET_NETWORKS_DONE, onComplete is null");
-                }
-                break;
-
              default:
                  super.handleMessage(msg);
         }
@@ -1554,10 +1507,6 @@ public class GSMPhone extends PhoneBase {
 
     public void setCellBroadcastSmsConfig(int[] configValuesArray, Message response){
         Log.e(LOG_TAG, "Error! This functionality is not implemented for GSM.");
-    }
-
-    public int getCspPlmnStatus() {
-        return mSIMRecords.getCspPlmn();
     }
 
 }

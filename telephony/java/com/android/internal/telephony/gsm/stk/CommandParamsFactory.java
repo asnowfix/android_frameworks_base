@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
- * Copyright (c) 2009-10, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +21,10 @@ import android.os.Handler;
 import android.os.Message;
 
 import com.android.internal.telephony.GsmAlphabet;
-import com.android.internal.telephony.IccFileHandler;
+import com.android.internal.telephony.gsm.SIMFileHandler;
 
 import java.util.Iterator;
 import java.util.List;
-import static com.android.internal.telephony.gsm.stk.StkCmdMessage.SetupEventListConstants.*;
 
 /**
  * Factory class, used for decoding raw byte arrays, received from baseband,
@@ -47,7 +45,6 @@ class CommandParamsFactory extends Handler {
     static final int LOAD_NO_ICON           = 0;
     static final int LOAD_SINGLE_ICON       = 1;
     static final int LOAD_MULTI_ICONS       = 2;
-    private boolean loadOptionalIcon = false;
 
     // Command Qualifier values for refresh command
     static final int REFRESH_NAA_INIT_AND_FULL_FILE_CHANGE  = 0x00;
@@ -55,11 +52,8 @@ class CommandParamsFactory extends Handler {
     static final int REFRESH_NAA_INIT                       = 0x03;
     static final int REFRESH_UICC_RESET                     = 0x04;
 
-   // Command Qualifier values for PLI command
-   static final int LANGUAGE_SETTING			    = 0x04;
-
     static synchronized CommandParamsFactory getInstance(RilMessageDecoder caller,
-            IccFileHandler fh) {
+            SIMFileHandler fh) {
         if (sInstance != null) {
             return sInstance;
         }
@@ -69,7 +63,7 @@ class CommandParamsFactory extends Handler {
         return null;
     }
 
-    private CommandParamsFactory(RilMessageDecoder caller, IccFileHandler fh) {
+    private CommandParamsFactory(RilMessageDecoder caller, SIMFileHandler fh) {
         mCaller = caller;
         mIconLoader = IconLoader.getInstance(this, fh);
     }
@@ -115,65 +109,57 @@ class CommandParamsFactory extends Handler {
 
         // extract command type enumeration from the raw value stored inside
         // the Command Details object.
-        AppInterface.CommandType cmdType = AppInterface.CommandType.fromInt(cmdDet.typeOfCommand);
+        AppInterface.CommandType cmdType = AppInterface.CommandType
+                .fromInt(cmdDet.typeOfCommand);
         if (cmdType == null) {
-            // This PROACTIVE COMMAND is presently not handled. Hence set
-            // result code as BEYOND_TERMINAL_CAPABILITY in TR.
-            mCmdParams = new CommandParams(cmdDet);
-            sendCmdParams(ResultCode.BEYOND_TERMINAL_CAPABILITY);
+            sendCmdParams(ResultCode.CMD_TYPE_NOT_UNDERSTOOD);
             return;
         }
 
         try {
             switch (cmdType) {
-                case SET_UP_MENU:
-                    cmdPending = processSelectItem(cmdDet, ctlvs);
-                    break;
-                case SELECT_ITEM:
-                    cmdPending = processSelectItem(cmdDet, ctlvs);
-                    break;
-                case DISPLAY_TEXT:
-                    cmdPending = processDisplayText(cmdDet, ctlvs);
-                    break;
-                case SET_UP_IDLE_MODE_TEXT:
-                    cmdPending = processSetUpIdleModeText(cmdDet, ctlvs);
-                    break;
-                case GET_INKEY:
-                    cmdPending = processGetInkey(cmdDet, ctlvs);
-                    break;
-                case GET_INPUT:
-                    cmdPending = processGetInput(cmdDet, ctlvs);
-                    break;
-                case SEND_DTMF:
-                case SEND_SMS:
-                case SEND_SS:
-                case SEND_USSD:
-                    cmdPending = processEventNotify(cmdDet, ctlvs);
-                    break;
-                case SET_UP_CALL:
-                    cmdPending = processSetupCall(cmdDet, ctlvs);
-                    break;
-                case REFRESH:
-                    processRefresh(cmdDet, ctlvs);
-                    cmdPending = false;
-                    break;
-                case LAUNCH_BROWSER:
-                    cmdPending = processLaunchBrowser(cmdDet, ctlvs);
-                    break;
-                case PLAY_TONE:
-                    cmdPending = processPlayTone(cmdDet, ctlvs);
-                    break;
-                case SET_UP_EVENT_LIST:
-                    cmdPending = processSetUpEventList(cmdDet, ctlvs);
-                    break;
-                case PROVIDE_LOCAL_INFORMATION:
-                    cmdPending = processProvideLocalInfo(cmdDet, ctlvs);
-                    break;
-                default:
-                    // unsupported proactive commands
-                    mCmdParams = new CommandParams(cmdDet);
-                    sendCmdParams(ResultCode.BEYOND_TERMINAL_CAPABILITY);
-                    return;
+            case SET_UP_MENU:
+                cmdPending = processSelectItem(cmdDet, ctlvs);
+                break;
+            case SELECT_ITEM:
+                cmdPending = processSelectItem(cmdDet, ctlvs);
+                break;
+            case DISPLAY_TEXT:
+                cmdPending = processDisplayText(cmdDet, ctlvs);
+                break;
+             case SET_UP_IDLE_MODE_TEXT:
+                 cmdPending = processSetUpIdleModeText(cmdDet, ctlvs);
+                 break;
+             case GET_INKEY:
+                cmdPending = processGetInkey(cmdDet, ctlvs);
+                break;
+             case GET_INPUT:
+                 cmdPending = processGetInput(cmdDet, ctlvs);
+                 break;
+             case SEND_DTMF:
+             case SEND_SMS:
+             case SEND_SS:
+             case SEND_USSD:
+                 cmdPending = processEventNotify(cmdDet, ctlvs);
+                 break;
+             case SET_UP_CALL:
+                 cmdPending = processSetupCall(cmdDet, ctlvs);
+                 break;
+             case REFRESH:
+                processRefresh(cmdDet, ctlvs);
+                cmdPending = false;
+                break;
+             case LAUNCH_BROWSER:
+                 cmdPending = processLaunchBrowser(cmdDet, ctlvs);
+                 break;
+             case PLAY_TONE:
+                cmdPending = processPlayTone(cmdDet, ctlvs);
+                break;
+            default:
+                // unsupported proactive commands
+                mCmdParams = new CommandParams(cmdDet);
+                sendCmdParams(ResultCode.CMD_TYPE_NOT_UNDERSTOOD);
+                return;
             }
         } catch (ResultException e) {
             mCmdParams = new CommandParams(cmdDet);
@@ -199,14 +185,6 @@ class CommandParamsFactory extends Handler {
         int iconIndex = 0;
 
         if (data == null) {
-            if (loadOptionalIcon) {
-                StkLog.d(this, "Optional Icon data is NULL");
-                mCmdParams.loadOptionalIconFailed = true;
-                loadOptionalIcon = false;
-                /** In case of icon load fail consider the
-                 ** received proactive command as valid (sending RESULT OK) */
-                return ResultCode.OK;
-            }
             return ResultCode.PRFRMD_ICON_NOT_DISPLAYED;
         }
         switch(mIconLoadState) {
@@ -218,10 +196,6 @@ class CommandParamsFactory extends Handler {
             // set each item icon.
             for (Bitmap icon : icons) {
                 mCmdParams.setIcon(icon);
-                if (icon == null && loadOptionalIcon) {
-                    StkLog.d(this, "Optional Icon data is NULL while loading multi icons");
-                    mCmdParams.loadOptionalIconFailed = true;
-                }
             }
             break;
         }
@@ -324,7 +298,6 @@ class CommandParamsFactory extends Handler {
         mCmdParams = new DisplayTextParams(cmdDet, textMsg);
 
         if (iconId != null) {
-            loadOptionalIcon = true;
             mIconLoadState = LOAD_SINGLE_ICON;
             mIconLoader.loadIcon(iconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
@@ -369,7 +342,6 @@ class CommandParamsFactory extends Handler {
 
         if (iconId != null) {
             mIconLoadState = LOAD_SINGLE_ICON;
-            loadOptionalIcon = true;
             mIconLoader.loadIcon(iconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
             return true;
@@ -408,18 +380,6 @@ class CommandParamsFactory extends Handler {
             iconId = ValueParser.retrieveIconId(ctlv);
         }
 
-        // parse duration
-        ctlv = searchForTag(ComprehensionTlvTag.DURATION, ctlvs);
-        if (ctlv != null) {
-            input.duration = ValueParser.retrieveDuration(ctlv);
-        }
-
-        // parse duration
-        ctlv = searchForTag(ComprehensionTlvTag.DURATION, ctlvs);
-        if (ctlv != null) {
-            input.duration = ValueParser.retrieveDuration(ctlv);
-        }
-
         input.minLen = 1;
         input.maxLen = 1;
 
@@ -431,7 +391,6 @@ class CommandParamsFactory extends Handler {
         mCmdParams = new GetInputParams(cmdDet, input);
 
         if (iconId != null) {
-            loadOptionalIcon = true;
             mIconLoadState = LOAD_SINGLE_ICON;
             mIconLoader.loadIcon(iconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
@@ -499,7 +458,6 @@ class CommandParamsFactory extends Handler {
         mCmdParams = new GetInputParams(cmdDet, input);
 
         if (iconId != null) {
-            loadOptionalIcon = true;
             mIconLoadState = LOAD_SINGLE_ICON;
             mIconLoader.loadIcon(iconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
@@ -613,7 +571,6 @@ class CommandParamsFactory extends Handler {
         case LOAD_NO_ICON:
             return false;
         case LOAD_SINGLE_ICON:
-            loadOptionalIcon = true;
             mIconLoader.loadIcon(titleIconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
             break;
@@ -626,7 +583,6 @@ class CommandParamsFactory extends Handler {
                 System.arraycopy(itemsIconId.recordNumbers, 0, recordNumbers,
                         1, itemsIconId.recordNumbers.length);
             }
-            loadOptionalIcon = true;
             mIconLoader.loadIcons(recordNumbers, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
             break;
@@ -669,7 +625,6 @@ class CommandParamsFactory extends Handler {
         mCmdParams = new DisplayTextParams(cmdDet, textMsg);
 
         if (iconId != null) {
-            loadOptionalIcon = true;
             mIconLoadState = LOAD_SINGLE_ICON;
             mIconLoader.loadIcon(iconId.recordNumber, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
@@ -684,48 +639,25 @@ class CommandParamsFactory extends Handler {
      * @param cmdDet Command Details object retrieved.
      * @param ctlvs List of ComprehensionTlv objects following Command Details
      *        object and Device Identities object within the proactive command
-     * @return false. This function always returns false meaning that the command
-     *         processing is  not pending and additional asynchronous processing
-     *         is not required.
+     * @return true if the command is processing is pending and additional
+     *         asynchronous processing is required.
      */
     private boolean processSetUpEventList(CommandDetails cmdDet,
             List<ComprehensionTlv> ctlvs) {
 
         StkLog.d(this, "process SetUpEventList");
-        ComprehensionTlv ctlv = searchForTag(ComprehensionTlvTag.EVENT_LIST, ctlvs);
-        if (ctlv != null) {
-            try {
-                byte[] rawValue = ctlv.getRawValue();
-                int valueIndex = ctlv.getValueIndex();
-                int valueLen = ctlv.getLength();
-                int[] eventList = new int[valueLen];
-                int eventValue = -1;
-                int i = 0;
-                while (valueLen > 0) {
-                    eventValue = rawValue[valueIndex] & 0xff;
-                    valueIndex++;
-                    valueLen--;
-
-                    switch (eventValue) {
-                        case USER_ACTIVITY_EVENT:
-                        case IDLE_SCREEN_AVAILABLE_EVENT:
-                        case LANGUAGE_SELECTION_EVENT:
-                        case BROWSER_TERMINATION_EVENT:
-                        case BROWSING_STATUS_EVENT:
-                            eventList[i] = eventValue;
-                            i++;
-                            break;
-                        default:
-                            break;
-                    }
-
-                }
-                mCmdParams = new SetEventListParams(cmdDet, eventList);
-            } catch (IndexOutOfBoundsException e) {
-                StkLog.d(this, " IndexOutofBoundException in processSetUpEventList");
-            }
-        }
-        return false;
+        //
+        // ComprehensionTlv ctlv = searchForTag(ComprehensionTlvTag.EVENT_LIST,
+        // ctlvs);
+        // if (ctlv != null) {
+        // try {
+        // byte[] rawValue = ctlv.getRawValue();
+        // int valueIndex = ctlv.getValueIndex();
+        // int valueLen = ctlv.getLength();
+        //
+        // } catch (IndexOutOfBoundsException e) {}
+        // }
+        return true;
     }
 
     /**
@@ -928,22 +860,6 @@ class CommandParamsFactory extends Handler {
             mIconLoader.loadIcons(recordNumbers, this
                     .obtainMessage(MSG_ID_LOAD_ICON_DONE));
             return true;
-        }
-        return false;
-    }
-
-    private boolean processProvideLocalInfo(CommandDetails cmdDet, List<ComprehensionTlv> ctlvs)
-            throws ResultException {
-        StkLog.d(this, "process ProvideLocalInfo");
-        switch (cmdDet.commandQualifier) {
-            case LANGUAGE_SETTING:
-                StkLog.d(this, "PLI [LANGUAGE_SETTING]");
-                mCmdParams = new CommandParams(cmdDet);
-                break;
-            default:
-                StkLog.d(this, "PLI[" + cmdDet.commandQualifier + "] Command Not Supported");
-                mCmdParams = new CommandParams(cmdDet);
-                throw new ResultException(ResultCode.BEYOND_TERMINAL_CAPABILITY);
         }
         return false;
     }

@@ -32,23 +32,6 @@ public interface AppInterface {
     public static final String STK_SESSION_END_ACTION =
                                     "android.intent.action.stk.session_end";
 
-    // This is broadcast from the ActivityManagerService when the screen
-    // switches to idle or busy state
-    public static final String STK_IDLE_SCREEN_ACTION =
-                                    "android.intent.action.stk.idle_screen";
-
-    // This is broadcast from the Stk Apps to ActivityManagerService when the screen
-    // status is requested.
-    public static final String CHECK_SCREEN_IDLE_ACTION =
-                                    "android.intent.action.stk.check_screen_idle";
-
-    //This is broadcasted from BrowserActivity when Browser exists
-    public static final String BROWSER_TERMINATE_ACTION =
-                                   "android.intent.action.stk.browser_terminate_action";
-
-    //This is used if Browser termination was erroneous
-    public static final String BROWSER_TERMINATION_CAUSE =
-                                   "browser_termination_cause";
     /*
      * Callback function from app to telephony to pass a result code and user's
      * input back to the SIM.
@@ -75,8 +58,7 @@ public interface AppInterface {
         SET_UP_EVENT_LIST(0x05),
         SET_UP_IDLE_MODE_TEXT(0x28),
         SET_UP_MENU(0x25),
-        SET_UP_CALL(0x10),
-        PROVIDE_LOCAL_INFORMATION(0x26);
+        SET_UP_CALL(0x10);
 
         private int mValue;
 

@@ -50,7 +50,6 @@ import com.android.internal.telephony.RetryManager;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.ServiceStateTracker;
 import com.android.internal.telephony.TelephonyEventLog;
-import com.android.internal.telephony.RILConstants;
 
 import java.util.ArrayList;
 
@@ -186,19 +185,12 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
 
         createAllDataConnectionList();
 
-        if (SystemProperties.getBoolean("persist.cust.tel.sdc.feature",false)) {
-            // The data call state is read during reboot.
-            dataEnabled[APN_DEFAULT_ID] = getSocketDataCallEnabled();
-            mMasterDataEnabled = dataEnabled[APN_DEFAULT_ID];
-            Log.d(LOG_TAG, "data enabled =" + dataEnabled[APN_DEFAULT_ID]);
-        } else {
-            // This preference tells us 1) initial condition for "dataEnabled",
-            // and 2) whether the RIL will setup the baseband to auto-PS
-            // attach.
-            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(phone.getContext());
-            dataEnabled[APN_DEFAULT_ID] = !sp.getBoolean(CDMAPhone.DATA_DISABLED_ON_BOOT_KEY, false);
-        }
+        // This preference tells us 1) initial condition for "dataEnabled",
+        // and 2) whether the RIL will setup the baseband to auto-PS attach.
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(phone.getContext());
 
+        dataEnabled[APN_DEFAULT_ID] =
+                !sp.getBoolean(CDMAPhone.DATA_DISABLED_ON_BOOT_KEY, false);
         if (dataEnabled[APN_DEFAULT_ID]) {
             enabledCount++;
         }
@@ -326,13 +318,6 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
             return true;
         }
 
-        if (SystemProperties.getBoolean("persist.cust.tel.sdc.feature",false)) {
-            if (!getSocketDataCallEnabled()) {
-                Log.i(LOG_TAG, "Socket data call is disabled");
-                return false;
-            }
-        }
-
         int psState = mCdmaPhone.mSST.getCurrentCdmaDataConnectionState();
         boolean roaming = phone.getServiceState().getRoaming();
         boolean desiredPowerState = mCdmaPhone.mSST.getDesiredPowerState();
@@ -341,6 +326,8 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
                 && (psState == ServiceState.STATE_IN_SERVICE)
                 && ((phone.mCM.getRadioState() == CommandsInterface.RadioState.NV_READY) ||
                         mCdmaPhone.mRuimRecords.getRecordsLoaded())
+                && (mCdmaPhone.mSST.isConcurrentVoiceAndData() ||
+                        phone.getState() == Phone.State.IDLE )
                 && isDataAllowed()
                 && desiredPowerState
                 && !mPendingRestartRadio
@@ -438,13 +425,9 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
         Message msg = obtainMessage();
         msg.what = EVENT_DATA_SETUP_COMPLETE;
         msg.obj = reason;
-        // Setting the state to INITING before calling connect.
-        // There can be a situation were response indicating connect
-        // failure arrives before the connect request completes. This will
-        // block all further attempts to establish data call.
-        setState(State.INITING);
         conn.connect(msg);
 
+        setState(State.INITING);
         phone.notifyDataConnection(reason);
         return true;
     }
@@ -461,6 +444,7 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
         rxPkts = -1;
         sentSinceLastRecv = 0;
         netStatPollPeriod = POLL_NETSTAT_MILLIS;
+        mNoRecvPollCount = 0;
     }
 
     protected void startNetStatPoll() {
@@ -539,7 +523,33 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
                     }
                 }
 
-                netStatPollPeriod = POLL_NETSTAT_MILLIS;
+                if (sentSinceLastRecv >= NUMBER_SENT_PACKETS_OF_HANG) {
+                    // Packets sent without ack exceeded threshold.
+
+                    if (mNoRecvPollCount == 0) {
+                        EventLog.writeEvent(
+                                TelephonyEventLog.EVENT_LOG_RADIO_RESET_COUNTDOWN_TRIGGERED,
+                                sentSinceLastRecv);
+                    }
+
+                    if (mNoRecvPollCount < NO_RECV_POLL_LIMIT) {
+                        mNoRecvPollCount++;
+                        // Slow down the poll interval to let things happen
+                        netStatPollPeriod = POLL_NETSTAT_SLOW_MILLIS;
+                    } else {
+                        if (DBG) log("Sent " + String.valueOf(sentSinceLastRecv) +
+                                            " pkts since last received");
+                        // We've exceeded the threshold.  Restart the radio.
+                        netStatPollEnabled = false;
+                        stopNetStatPoll();
+                        restartRadio();
+                        EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_RADIO_RESET,
+                                NO_RECV_POLL_LIMIT);
+                    }
+                } else {
+                    mNoRecvPollCount = 0;
+                    netStatPollPeriod = POLL_NETSTAT_MILLIS;
+                }
 
                 if (netStatPollEnabled) {
                     mDataConnectionTracker.postDelayed(this, netStatPollPeriod);
@@ -568,8 +578,7 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
     private boolean retryAfterDisconnected(String reason) {
         boolean retry = true;
 
-        if ((Phone.REASON_RADIO_TURNED_OFF.equals(reason))
-                || (Phone.REASON_RADIO_TECHNOLOGY_CHANGED.equals(reason))) {
+        if ( Phone.REASON_RADIO_TURNED_OFF.equals(reason) ) {
             retry = false;
         }
         return retry;
@@ -862,7 +871,7 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
         EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_CDMA_DATA_DROP, val);
     }
 
-    protected void onDataStateChanged(AsyncResult ar) {
+    protected void onDataStateChanged (AsyncResult ar) {
         ArrayList<DataCallState> dataCallStates = (ArrayList<DataCallState>)(ar.result);
 
         if (ar.exception != null) {
@@ -873,57 +882,32 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
         }
 
         if (state == State.CONNECTED) {
-            boolean isActiveOrDormantConnectionPresent = false;
-            int connectionState = DATA_CONNECTION_ACTIVE_PH_LINK_INACTIVE;
-
-            // Check for an active or dormant connection element in
-            // the DATA_CALL_LIST array
-            for (int index = 0; index < dataCallStates.size(); index++) {
-                connectionState = dataCallStates.get(index).active;
-                if (connectionState != DATA_CONNECTION_ACTIVE_PH_LINK_INACTIVE) {
-                    isActiveOrDormantConnectionPresent = true;
-                    break;
-                }
-            }
-
-            if (!isActiveOrDormantConnectionPresent) {
-                // No active or dormant connection
-                Log.i(LOG_TAG, "onDataStateChanged: No active connection"
-                        + "state is CONNECTED, disconnecting/cleanup");
-                writeEventLogCdmaDataDrop();
-                // Check whether network mode is CDMA , If network mode is
-                // CDMA tear down the data call and retry for new data call.
-                // Else if network mode is GSM tear down the data call
-                // and do not retry setup data call. In order to avoid
-                // retrying the data call pass reason as
-                // RADIO_TECHNOLOGY_CHANGED
-                if (mCdmaPhone.getPhoneTypeFromNetworkType() == RILConstants.CDMA_PHONE) {
-                    cleanUpConnection(true, null);
-                } else {
-                    Log.i(LOG_TAG, "Data reconnect disabled due to radio technology changed");
-                    cleanUpConnection(true, Phone.REASON_RADIO_TECHNOLOGY_CHANGED);
-                }
-                return;
-            }
-
-            switch (connectionState) {
+            if (dataCallStates.size() >= 1) {
+                switch (dataCallStates.get(0).active) {
                 case DATA_CONNECTION_ACTIVE_PH_LINK_UP:
                     Log.v(LOG_TAG, "onDataStateChanged: active=LINK_ACTIVE && CONNECTED, ignore");
                     activity = Activity.NONE;
                     phone.notifyDataActivity();
-                    startNetStatPoll();
                     break;
-
+                case DATA_CONNECTION_ACTIVE_PH_LINK_INACTIVE:
+                    Log.v(LOG_TAG,
+                    "onDataStateChanged active=LINK_INACTIVE && CONNECTED, disconnecting/cleanup");
+                    writeEventLogCdmaDataDrop();
+                    cleanUpConnection(true, null);
+                    break;
                 case DATA_CONNECTION_ACTIVE_PH_LINK_DOWN:
                     Log.v(LOG_TAG, "onDataStateChanged active=LINK_DOWN && CONNECTED, dormant");
                     activity = Activity.DORMANT;
                     phone.notifyDataActivity();
-                    stopNetStatPoll();
                     break;
-
                 default:
                     Log.v(LOG_TAG, "onDataStateChanged: IGNORE unexpected DataCallState.active="
-                            + connectionState);
+                            + dataCallStates.get(0).active);
+                }
+            } else {
+                Log.v(LOG_TAG, "onDataStateChanged: network disconnected, clean up");
+                writeEventLogCdmaDataDrop();
+                cleanUpConnection(true, null);
             }
         } else {
             // TODO: Do we need to do anything?
@@ -969,11 +953,6 @@ public final class CdmaDataConnectionTracker extends DataConnectionTracker {
     }
 
     public void handleMessage (Message msg) {
-
-        if (!phone.mIsTheCurrentActivePhone) {
-            Log.d(LOG_TAG, "Ignore CDMA msgs since CDMA phone is inactive");
-            return;
-        }
 
         switch (msg.what) {
             case EVENT_RECORDS_LOADED:

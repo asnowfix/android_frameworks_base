@@ -55,7 +55,6 @@ import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.RetryManager;
 import com.android.internal.telephony.TelephonyEventLog;
 import com.android.internal.telephony.DataConnection.FailCause;
-import com.android.internal.telephony.RILConstants;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -90,6 +89,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
     private boolean mReregisterOnReconnectFailure = false;
     private ContentResolver mResolver;
 
+    private boolean mPingTestActive = false;
     // Count of PDP reset attempts; reset when we see incoming,
     // call reRegisterNetwork, or pingTest succeeds.
     private int mPdpResetCount = 0;
@@ -241,18 +241,10 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
 
         createAllPdpList();
 
-        if (SystemProperties.getBoolean("persist.cust.tel.sdc.feature",false)) {
-            // The data call state is read during reboot.
-            dataEnabled[APN_DEFAULT_ID] = getSocketDataCallEnabled();
-            mMasterDataEnabled = dataEnabled[APN_DEFAULT_ID];
-            Log.d(LOG_TAG, "data enabled =" + dataEnabled[APN_DEFAULT_ID]);
-        } else {
-            // This preference tells us 1) initial condition for "dataEnabled",
-            // and 2) whether the RIL will setup the baseband to auto-PS
-            // attach.
-            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(phone.getContext());
-            dataEnabled[APN_DEFAULT_ID] = !sp.getBoolean(GSMPhone.DATA_DISABLED_ON_BOOT_KEY, false);
-        }
+        // This preference tells us 1) initial condition for "dataEnabled",
+        // and 2) whether the RIL will setup the baseband to auto-PS attach.
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(phone.getContext());
+        dataEnabled[APN_DEFAULT_ID] = !sp.getBoolean(GSMPhone.DATA_DISABLED_ON_BOOT_KEY, false);
         if (dataEnabled[APN_DEFAULT_ID]) {
             enabledCount++;
         }
@@ -444,12 +436,6 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
             Log.i(LOG_TAG, "(fix?) We're on the simulator; assuming data is connected");
             return true;
         }
-        if (SystemProperties.getBoolean("persist.cust.tel.sdc.feature",false)) {
-            if (!getSocketDataCallEnabled()) {
-                Log.i(LOG_TAG, "Socket data call is disabled");
-                return false;
-            }
-        }
 
         int gprsState = mGsmPhone.mSST.getCurrentGprsState();
         boolean desiredPowerState = mGsmPhone.mSST.getDesiredPowerState();
@@ -457,6 +443,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
         if ((state == State.IDLE || state == State.SCANNING)
                 && (gprsState == ServiceState.STATE_IN_SERVICE || noAutoAttach)
                 && mGsmPhone.mSIMRecords.getRecordsLoaded()
+                && phone.getState() == Phone.State.IDLE
                 && isDataAllowed()
                 && !mIsPsRestricted
                 && desiredPowerState ) {
@@ -604,13 +591,9 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
         Message msg = obtainMessage();
         msg.what = EVENT_DATA_SETUP_COMPLETE;
         msg.obj = reason;
-        // Setting the state to INITING before calling connect.
-        // There can be a situation were response indicating connect
-        // failure arrives before the connect request completes. This will
-        // block all further attempts to establish data call.
-        setState(State.INITING);
         pdp.connect(apn, msg);
 
+        setState(State.INITING);
         phone.notifyDataConnection(reason);
         return true;
     }
@@ -685,39 +668,17 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
         // TODO: It'd be nice to only do this if the changed entrie(s)
         // match the current operator.
         createAllApnList();
-        if (IsPreferredApnChanged()) {
-           if (state != State.DISCONNECTING) {
-              cleanUpConnection(isConnected, Phone.REASON_APN_CHANGED);
-              if (!isConnected) {
-                 // reset reconnect timer
-                 mRetryMgr.resetRetryCount();
-                 mReregisterOnReconnectFailure = false;
-                 trySetupData(Phone.REASON_APN_CHANGED);
-             }
-          }
-       }
+        if (state != State.DISCONNECTING) {
+            cleanUpConnection(isConnected, Phone.REASON_APN_CHANGED);
+            if (!isConnected) {
+                // reset reconnect timer
+                mRetryMgr.resetRetryCount();
+                mReregisterOnReconnectFailure = false;
+                trySetupData(Phone.REASON_APN_CHANGED);
+            }
+        }
     }
 
-    /**
-     * Checks if the PreferredApn is Changed
-     **/
-    private boolean IsPreferredApnChanged() {
-       boolean change = true;
-       Log.d(LOG_TAG, "mActiveApn: "+ mActiveApn);
-       Log.d(LOG_TAG, "Preferred APN: " +  preferredApn );
-
-       if ((preferredApn != null) && (mActiveApn != null))  {
-           if ((mActiveApn.toString().equals(preferredApn.toString() )) &&
-               ((mActiveApn.user != null && mActiveApn.user.equals(preferredApn.user)) ||
-                (mActiveApn.user == null && preferredApn.user == null)) &&
-               ((mActiveApn.password != null && mActiveApn.password.equals(preferredApn.password)) ||
-                (mActiveApn.password == null && preferredApn.password == null)))  {
-                change = false;
-          }
-       }
-       Log.d(LOG_TAG, "Is Preferred APN changed: "+ change);
-       return change;
-    }
     /**
      * @param explicitPoll if true, indicates that *we* polled for this
      * update while state == CONNECTED rather than having it delivered
@@ -757,18 +718,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
                         TelephonyManager.getDefault().getNetworkType());
                 EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_PDP_NETWORK_DROP, val);
 
-                // Check whether network mode is GSM , If network mode is
-                // GSM tear down the data call and retry for new data call.
-                // Else if network mode is CDMA tear down the data call
-                // and do not retry setup data call. In order to avoid
-                // retrying the data call pass reason as
-                // RADIO_TECHNOLOGY_CHANGED
-                if (mGsmPhone.getPhoneTypeFromNetworkType() == RILConstants.GSM_PHONE) {
-                    cleanUpConnection(true, null);
-                } else {
-                    Log.i(LOG_TAG, "Data reconnect disabled due to radio technology changed");
-                    cleanUpConnection(true, Phone.REASON_RADIO_TECHNOLOGY_CHANGED);
-                }
+                cleanUpConnection(true, null);
                 return;
             } else if (!pdpStatesHasActiveCID(pdpStates, cidActive)) {
                 // Here, we only consider this authoritative if we asked for the
@@ -791,18 +741,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
                             TelephonyManager.getDefault().getNetworkType());
                     EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_PDP_NETWORK_DROP, val);
 
-                    // Check whether network mode is GSM , If network mode is
-                    // GSM tear down the data call and retry for new data call.
-                    // Else if network mode is CDMA tear down the data call
-                    // and do not retry setup data call. In order to avoid
-                    // retrying the data call pass reason as
-                    // RADIO_TECHNOLOGY_CHANGED
-                    if (mGsmPhone.getPhoneTypeFromNetworkType() == RILConstants.GSM_PHONE) {
-                        cleanUpConnection(true, null);
-                    } else {
-                        Log.i(LOG_TAG, "Data reconnect disabled due to radio technology changed");
-                        cleanUpConnection(true, Phone.REASON_RADIO_TECHNOLOGY_CHANGED);
-                    }
+                    cleanUpConnection(true, null);
                 }
             }
         }
@@ -834,6 +773,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
         rxPkts = -1;
         sentSinceLastRecv = 0;
         netStatPollPeriod = POLL_NETSTAT_MILLIS;
+        mNoRecvPollCount = 0;
     }
 
     private void doRecovery() {
@@ -856,7 +796,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
     }
 
     protected void startNetStatPoll() {
-        if (state == State.CONNECTED && netStatPollEnabled == false) {
+        if (state == State.CONNECTED && mPingTestActive == false && netStatPollEnabled == false) {
             Log.d(LOG_TAG, "[DataConnection] Start poll NetStat");
             resetPollStats();
             netStatPollEnabled = true;
@@ -940,13 +880,56 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
                 }
             }
 
-            if (mIsScreenOn) {
-                netStatPollPeriod = Settings.Gservices.getInt(mResolver,
-                        Settings.Gservices.PDP_WATCHDOG_POLL_INTERVAL_MS, POLL_NETSTAT_MILLIS);
+            int watchdogTrigger = Settings.Gservices.getInt(mResolver,
+                    Settings.Gservices.PDP_WATCHDOG_TRIGGER_PACKET_COUNT,
+                    NUMBER_SENT_PACKETS_OF_HANG);
+
+            if (sentSinceLastRecv >= watchdogTrigger) {
+                // we already have NUMBER_SENT_PACKETS sent without ack
+                if (mNoRecvPollCount == 0) {
+                    EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_RADIO_RESET_COUNTDOWN_TRIGGERED,
+                            sentSinceLastRecv);
+                }
+
+                int noRecvPollLimit = Settings.Gservices.getInt(mResolver,
+                        Settings.Gservices.PDP_WATCHDOG_ERROR_POLL_COUNT, NO_RECV_POLL_LIMIT);
+
+                if (mNoRecvPollCount < noRecvPollLimit) {
+                    // It's possible the PDP context went down and we weren't notified.
+                    // Start polling the context list in an attempt to recover.
+                    if (DBG) log("no DATAIN in a while; polling PDP");
+                    phone.mCM.getDataCallList(obtainMessage(EVENT_GET_PDP_LIST_COMPLETE));
+
+                    mNoRecvPollCount++;
+
+                    // Slow down the poll interval to let things happen
+                    netStatPollPeriod = Settings.Gservices.getInt(mResolver,
+                            Settings.Gservices.PDP_WATCHDOG_ERROR_POLL_INTERVAL_MS,
+                            POLL_NETSTAT_SLOW_MILLIS);
+                } else {
+                    if (DBG) log("Sent " + String.valueOf(sentSinceLastRecv) +
+                                        " pkts since last received");
+                    // We've exceeded the threshold.  Run ping test as a final check;
+                    // it will proceed with recovery if ping fails.
+                    stopNetStatPoll();
+                    Thread pingTest = new Thread() {
+                        public void run() {
+                            runPingTest();
+                        }
+                    };
+                    mPingTestActive = true;
+                    pingTest.start();
+                }
             } else {
-                netStatPollPeriod = Settings.Gservices.getInt(mResolver,
-                        Settings.Gservices.PDP_WATCHDOG_LONG_POLL_INTERVAL_MS,
-                        POLL_NETSTAT_SCREEN_OFF_MILLIS);
+                mNoRecvPollCount = 0;
+                if (mIsScreenOn) {
+                    netStatPollPeriod = Settings.Gservices.getInt(mResolver,
+                            Settings.Gservices.PDP_WATCHDOG_POLL_INTERVAL_MS, POLL_NETSTAT_MILLIS);
+                } else {
+                    netStatPollPeriod = Settings.Gservices.getInt(mResolver,
+                            Settings.Gservices.PDP_WATCHDOG_LONG_POLL_INTERVAL_MS,
+                            POLL_NETSTAT_SCREEN_OFF_MILLIS);
+                }
             }
 
             if (netStatPollEnabled) {
@@ -954,6 +937,37 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
             }
         }
     };
+
+    private void runPingTest () {
+        int status = -1;
+        try {
+            String address = Settings.Gservices.getString(mResolver,
+                    Settings.Gservices.PDP_WATCHDOG_PING_ADDRESS);
+            int deadline = Settings.Gservices.getInt(mResolver,
+                        Settings.Gservices.PDP_WATCHDOG_PING_DEADLINE, DEFAULT_PING_DEADLINE);
+            if (DBG) log("pinging " + address + " for " + deadline + "s");
+            if (address != null && !NULL_IP.equals(address)) {
+                Process p = Runtime.getRuntime()
+                                .exec("ping -c 1 -i 1 -w "+ deadline + " " + address);
+                status = p.waitFor();
+            }
+        } catch (IOException e) {
+            Log.w(LOG_TAG, "ping failed: IOException");
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "exception trying to ping");
+        }
+
+        if (status == 0) {
+            // ping succeeded.  False alarm.  Reset netStatPoll.
+            // ("-1" for this event indicates a false alarm)
+            EventLog.writeEvent(TelephonyEventLog.EVENT_LOG_PDP_RESET, -1);
+            mPdpResetCount = 0;
+            sendMessage(obtainMessage(EVENT_START_NETSTAT_POLL));
+        } else {
+            // ping failed.  Proceed with recovery.
+            sendMessage(obtainMessage(EVENT_START_RECOVERY));
+        }
+    }
 
     /**
      * Returns true if the last fail cause is something that
@@ -979,8 +993,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
     private boolean retryAfterDisconnected(String reason) {
         boolean retry = true;
 
-        if ((Phone.REASON_RADIO_TURNED_OFF.equals(reason))
-                || (Phone.REASON_RADIO_TECHNOLOGY_CHANGED.equals(reason))) {
+        if ( Phone.REASON_RADIO_TURNED_OFF.equals(reason) ) {
             retry = false;
         }
         return retry;
@@ -1404,12 +1417,6 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
 
     public void handleMessage (Message msg) {
         if (DBG) Log.d(LOG_TAG,"GSMDataConnTrack handleMessage "+msg);
-
-        if (!mGsmPhone.mIsTheCurrentActivePhone) {
-            Log.d(LOG_TAG, "Ignore GSM msgs since GSM phone is inactive");
-            return;
-        }
-
         switch (msg.what) {
             case EVENT_RECORDS_LOADED:
                 onRecordsLoaded();
@@ -1436,10 +1443,12 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
                 break;
 
             case EVENT_START_NETSTAT_POLL:
+                mPingTestActive = false;
                 startNetStatPoll();
                 break;
 
             case EVENT_START_RECOVERY:
+                mPingTestActive = false;
                 doRecovery();
                 break;
 

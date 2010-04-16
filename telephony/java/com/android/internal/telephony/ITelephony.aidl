@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
- * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -223,12 +222,6 @@ interface ITelephony {
     int getActivePhoneType();
 
     /**
-     * Sends a OEM request to the RIL and returns the response back to the
-     * Caller. The returnValue is negative on failure. 0 or length of response on SUCCESS
-     */
-    int sendOemRilRequestRaw(in byte[] request, out byte[] response);
-
-    /**
      * Returns the CDMA ERI icon index to display
      */
     int getCdmaEriIconIndex();
@@ -259,37 +252,10 @@ interface ITelephony {
       * Returns the network type
       */
     int getNetworkType();
-
-    /**
-     * Checks whether the modem is in power save mode
-     * {@hide}
-     */
-    boolean isModemPowerSave();
-
+    
     /**
      * Return true if an ICC card is present
      */
     boolean hasIccCard();
-
-    /**
-     * Returns Interface Name
-     */
-    String getActiveInterfaceName(String apnType);
-
-    /**
-     * Returns Ip address
-     */
-    String getActiveIpAddress(String apnType);
-
-    /**
-     * Returns Gateway address
-     */
-    String getActiveGateway(String apnType);
-
-    /**
-     * Gets the number of attempts remaining for PIN1/PUK1 unlock.
-     */
-    int getIccPin1RetryCount();
-
 }
 

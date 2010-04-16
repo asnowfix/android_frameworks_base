@@ -103,22 +103,14 @@ public final class GsmCallTracker extends CallTracker {
 
         for(GsmConnection c : connections) {
             try {
-                if(c != null) {
-                    hangup(c);
-                    // Since by now we are unregistered, we won't notify
-                    // PhoneApp that the call is gone. Do that here
-                    c.onDisconnect(Connection.DisconnectCause.LOST_SIGNAL);
-                }
+                if(c != null) hangup(c);
             } catch (CallStateException ex) {
                 Log.e(LOG_TAG, "unexpected error on hangup during dispose");
             }
         }
 
         try {
-            if(pendingMO != null) {
-                hangup(pendingMO);
-                pendingMO.onDisconnect(Connection.DisconnectCause.LOST_SIGNAL);
-            }
+            if(pendingMO != null) hangup(pendingMO);
         } catch (CallStateException ex) {
             Log.e(LOG_TAG, "unexpected error on hangup during dispose");
         }
@@ -824,11 +816,6 @@ public final class GsmCallTracker extends CallTracker {
     handleMessage (Message msg) {
         AsyncResult ar;
 
-        if (!phone.mIsTheCurrentActivePhone) {
-            Log.e(LOG_TAG, "Received message " + msg +
-                    "[" + msg.what + "] while being destroyed. Ignoring.");
-            return;
-        }
         switch (msg.what) {
             case EVENT_POLL_CALLS_RESULT:
                 ar = (AsyncResult)msg.obj;

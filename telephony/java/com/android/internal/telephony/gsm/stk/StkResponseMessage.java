@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 The Android Open Source Project
- * Copyright (C) 2009-10, Code Aurora Forum. All rights reserved
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,8 +16,6 @@
 
 package com.android.internal.telephony.gsm.stk;
 
-import static com.android.internal.telephony.gsm.stk.StkCmdMessage.SetupEventListConstants.*;
-
 public class StkResponseMessage {
         CommandDetails cmdDet = null;
         ResultCode resCode  = ResultCode.OK;
@@ -25,10 +23,6 @@ public class StkResponseMessage {
         String usersInput  = null;
         boolean usersYesNoSelection = false;
         boolean usersConfirm = false;
-        boolean includeAdditionalInfo = false;
-        int additionalInfo = 0;
-        int eventValue = -1;
-        byte[] addedInfo = new byte[MAX_ADDED_EVENT_DOWNLOAD_LEN];
 
         public StkResponseMessage(StkCmdMessage cmdMsg) {
             this.cmdDet = cmdMsg.mCmdDet;
@@ -46,22 +40,12 @@ public class StkResponseMessage {
             this.usersInput = input;
         }
 
-        public void setEventDownload(int event,byte[] addedInfo) {
-            this.eventValue = event;
-            this.addedInfo = addedInfo;
-        }
-
         public void setYesNo(boolean yesNo) {
             usersYesNoSelection = yesNo;
         }
 
         public void setConfirmation(boolean confirm) {
             usersConfirm = confirm;
-        }
-
-        public void setAdditionalInfo(boolean addInfoReq,int addInfoCode) {
-            this.includeAdditionalInfo = addInfoReq;
-            this.additionalInfo = addInfoCode;
         }
 
         CommandDetails getCmdDetails() {

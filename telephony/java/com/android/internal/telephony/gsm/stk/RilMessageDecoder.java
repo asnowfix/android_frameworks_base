@@ -16,7 +16,7 @@
 
 package com.android.internal.telephony.gsm.stk;
 
-import com.android.internal.telephony.IccFileHandler;
+import com.android.internal.telephony.gsm.SIMFileHandler;
 import com.android.internal.telephony.IccUtils;
 
 import android.os.Handler;
@@ -51,7 +51,7 @@ class RilMessageDecoder extends HandlerStateMachine {
      * @param fh
      * @return RilMesssageDecoder
      */
-    public static synchronized RilMessageDecoder getInstance(Handler caller, IccFileHandler fh) {
+    public static synchronized RilMessageDecoder getInstance(Handler caller, SIMFileHandler fh) {
         if (sInstance == null) {
             sInstance = new RilMessageDecoder(caller, fh);
         }
@@ -89,7 +89,7 @@ class RilMessageDecoder extends HandlerStateMachine {
         msg.sendToTarget();
     }
 
-    private RilMessageDecoder(Handler caller, IccFileHandler fh) {
+    private RilMessageDecoder(Handler caller, SIMFileHandler fh) {
         super("RilMessageDecoder");
         setDbg(false);
         setInitialState(mStateStart);
@@ -156,11 +156,6 @@ class RilMessageDecoder extends HandlerStateMachine {
             } catch (ResultException e) {
                 // send to Service for proper RIL communication.
                 mCurrentRilMessage.mResCode = e.result();
-                //Incase of incorrect PROACTIVE COMMAND DATA, CommandParams
-                //will not be decoded. So initialize it to null, otherwise
-                //this will lead to Class Cast exception when type casted to
-                //RilMessage in StkService.
-                mCurrentRilMessage.mData = null;
                 sendCmdForExecution(mCurrentRilMessage);
                 decodingStarted = false;
             }
